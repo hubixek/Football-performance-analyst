@@ -25,6 +25,7 @@ cat > ANNOTATION.md << 'EOF'
 - piłka rozmazana: zaznaczam całą smugę, jeśli wiadomo, że to piłka
 - piłka częściowo zasłonięta lub w rękach bramkarza: zaznaczam, jeśli widać jej część
 - mali zawodnicy daleko od kamery: zawsze zaznaczam
+- jeśli piłka jest blisko lini to musi znajdować sie w polu pomiędzy nimi
 
 ## Zmiany kryteriów
 Każda zmiana reguły = przejrzenie wcześniej zaanotowanych klatek.

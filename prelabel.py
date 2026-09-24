@@ -1,4 +1,3 @@
-cat > prelabel.py << 'EOF'
 import sys, zipfile
 from pathlib import Path
 from ultralytics import YOLO
@@ -27,4 +26,3 @@ with zipfile.ZipFile(out, "w") as z:
             lines.append(f"{cls} {x:.6f} {y:.6f} {w:.6f} {h:.6f}")
         z.writestr(f"obj_train_data/{Path(r.path).stem}.txt", "\n".join(lines))
 print(f"Gotowe: {out} ({len(imgs)} klatek)")
-EOF
