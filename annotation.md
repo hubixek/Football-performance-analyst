@@ -3,7 +3,6 @@ cat > ANNOTATION.md << 'EOF'
 
 ## Klasy
 - **player** – zawodnik z pola, który jest na boisku i bierze udział w grze
-- **goalkeeper** – bramkarz, niezależnie od pozycji
 - **referee** – sędzia na boisku
 - **ball** – piłka meczowa w grze
 
@@ -12,6 +11,7 @@ cat > ANNOTATION.md << 'EOF'
 - zawodnik przy zmianie – zaznaczany dopiero po wejściu na boisko
 - zapasowe piłki poza boiskiem
 - odbicia i cienie
+- więcej niż jeden obiekt klasy referee
 
 ## Rysowanie boxów
 - box obejmuje całą sylwetkę: od czubka głowy do stóp, z wyciągniętymi rękami i nogami

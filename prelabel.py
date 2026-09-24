@@ -4,11 +4,11 @@ from ultralytics import YOLO
 
 frames = Path(sys.argv[1])  
 model_path = sys.argv[2] if len(sys.argv) > 2 else "yolov8s.pt"
-names = ["player", "goalkeeper", "referee", "ball"]
+names = ["player", "referee", "ball"]
 
 model = YOLO(model_path)
 pretrained = model_path == "yolov8s.pt"
-remap = {0: 0, 32: 3}     
+remap = {0: 0, 32: 2}     
 
 out = frames.with_suffix(".zip")
 imgs = sorted(frames.glob("*.jpg"))

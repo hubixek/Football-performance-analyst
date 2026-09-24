@@ -4,7 +4,7 @@ The software analyzes 6v6 football matches recorded with a single camera and gen
 performance statistics for each team, such as ball possession, positioning and
 overall performance.
 
-> Status: Early stage of development – first detection model (v1) trained
+> Status: Early stage of development – detection model v3 trained
 
 ## Technologies
 - Python
@@ -15,40 +15,44 @@ overall performance.
 
 ## How it works
 1. Input: match video recording (e.g. `.mp4`)
-2. Detection of players, goalkeepers, referees and the ball on each frame (YOLOv8)
+2. Detection of players, referees and the ball on each frame (YOLOv8)
 3. Tracking players across frames
 4. Assigning players to teams (jersey color)
 5. Mapping positions from the image to pitch coordinates
-6. Calculating statistics
-7. Output: team statistics 
+6. Identifying goalkeepers by position (player closest to own goal)
+7. Calculating statistics
+8. Output: team statistics (and optionally an annotated video)
 
 ## Dataset
 - Frames extracted from match recordings with FFmpeg
 - Pre-annotated automatically with a YOLO model, then corrected manually in CVAT
 - Annotation guidelines: [`ANNOTATION.md`](ANNOTATION.md)
-- Classes: `player`, `goalkeeper`, `referee`, `ball`
+- Classes: `player`, `referee`, `ball`
+- Goalkeepers are annotated as `player` – on a single wide camera they are too small
+  to be reliably distinguished visually, so they are identified later by position
 - Train/validation split by match (not by frame) to avoid data leakage
 - Videos, frames and the dataset are not stored in this repository
 
 ## Annotation workflow
 1. Extract frames from a match:
 ```bash
-   ffmpeg -i videos/mecz.mp4 -vf fps=0.5 -q:v 2 frames/mecz/mecz_%04d.jpg
+   ffmpeg -i videos/mecz.mp4 -vf fps=0.05 -q:v 2 frames/mecz/mecz%04d.jpg
 ```
-2. Pre-annotate the frames (pretrained COCO model or own trained model):
+2. Delete frames without play
+3. Pre-annotate the frames (pretrained COCO model or own trained model):
 ```bash
    python prelabel.py frames/mecz
-   python prelabel.py frames/mecz runs/detect/runs/v1/weights/best.pt
+   python prelabel.py frames/mecz runs/detect/runs/v3/weights/best.pt
 ```
-3. Create a task in CVAT, upload the frames and import the generated ZIP (YOLO 1.1)
-4. Correct the annotations according to `ANNOTATION.md`
-5. Export the project from CVAT (Ultralytics YOLO Detection, with images) and split it into train/val by match
+4. Create a task in CVAT, upload the frames and import the generated ZIP as **YOLO 1.1**
+5. Correct the annotations according to `ANNOTATION.md`
+6. Export the task as **Ultralytics YOLO Detection** (with images) and add it to the dataset
 
 ## Scripts
 | Script | Description |
 |---|---|
 | `prelabel.py` | Runs a YOLO model on extracted frames and creates a ZIP ready to import into CVAT |
-| `build_dataset.py` | Builds a dataset from frame folders and YOLO 1.1 label exports |
+| `remap_classes.py` | One-time conversion of labels from 4 classes (with goalkeeper) to 3 classes |
 
 ## Installation
 ```bash
@@ -58,7 +62,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-A CUDA-capable GPU is recommended for training.
+FFmpeg is required for frame extraction. A CUDA-capable GPU is recommended for training.
 
 ## Training
 ```bash
@@ -66,9 +70,23 @@ yolo train model=yolov8s.pt data=dataset/data.yaml epochs=100 imgsz=1280 batch=8
 ```
 
 ## Results
+All models are evaluated on the same validation match (91 frames).
 
-### v1 (YOLOv8s, imgsz=1280)
-Data: 89 training frames (1 match), 91 validation frames (another match).
+### v3 (YOLOv8s, imgsz=1280) – goalkeeper merged into player
+Data: 149 training frames (3 matches).
+
+| Class | mAP50 | mAP50-95 |
+|---|---|---|
+| all | 0.783 | 0.604 |
+| player | 0.954 | 0.805 |
+| referee | 0.903 | 0.770 |
+| ball | 0.493 | 0.237 |
+
+In the 4-class setup, most goalkeepers were classified as `player`, so the classes were merged.
+Ball detection (recall 0.41) is now the main bottleneck.
+
+### v1 (YOLOv8s, imgsz=1280) – 4 classes
+Data: 89 training frames (2 matches).
 
 | Class | mAP50 | mAP50-95 |
 |---|---|---|
@@ -78,20 +96,19 @@ Data: 89 training frames (1 match), 91 validation frames (another match).
 | referee | 0.838 | 0.656 |
 | ball | 0.427 | 0.262 |
 
-Next step: more matches in the training set, with focus on goalkeeper and ball examples.
-
 ## TODO
 - [x] Annotation workflow (pre-annotation + CVAT)
-- [x] First detection model (v1)
-- [ ] Improve goalkeeper and ball detection (more training data)
+- [x] First detection models (v1, v3)
+- [x] Merge goalkeeper into player
+- [ ] Improve ball detection (more matches, higher resolution, SAHI)
 - [ ] Player tracking (ByteTrack)
 - [ ] Team assignment (jersey color)
 - [ ] Mapping positions to pitch coordinates (homography)
+- [ ] Goalkeeper identification by position
 - [ ] Ball possession stats
 - [ ] Player positioning and heatmaps
 - [ ] Overall team performance score
 - [ ] Export results to CSV
-- [ ] Usage instructions for the full pipeline
 
 ## Author
 Hubert – [GitHub](https://github.com/hubixek)
