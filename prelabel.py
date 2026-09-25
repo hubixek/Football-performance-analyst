@@ -16,7 +16,7 @@ with zipfile.ZipFile(out, "w") as z:
     z.writestr("obj.names", "\n".join(names))
     z.writestr("obj.data", f"classes = {len(names)}\nnames = data/obj.names\ntrain = data/train.txt\n")
     z.writestr("train.txt", "\n".join(f"data/obj_train_data/{p.name}" for p in imgs))
-    kwargs = dict(conf=0.25, imgsz=1280, stream=True, verbose=False)
+    kwargs = dict(conf=0.25, imgsz=1920, stream=True, verbose=False)
     if pretrained:
         kwargs["classes"] = [0, 32]
     for r in model.predict(imgs, **kwargs):

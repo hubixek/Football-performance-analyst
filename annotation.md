@@ -12,6 +12,7 @@ cat > ANNOTATION.md << 'EOF'
 - zapasowe piłki poza boiskiem
 - odbicia i cienie
 - więcej niż jeden obiekt klasy referee
+- więcej niż jeden obiekt klasy ball
 
 ## Rysowanie boxów
 - box obejmuje całą sylwetkę: od czubka głowy do stóp, z wyciągniętymi rękami i nogami
