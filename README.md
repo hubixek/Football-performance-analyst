@@ -4,25 +4,57 @@ The software analyzes 6v6 football matches recorded with a single camera and gen
 performance statistics for each team, such as ball possession, positioning and
 overall performance.
 
-> Status: Early stage of development – detection model v6 trained, analysis pipeline in progress
+> Status: first end-to-end statistic (ball possession) working; detection model v6
 
 ## Technologies
-- Python
+- Python, OpenCV
 - [YOLOv8 (Ultralytics)](https://github.com/ultralytics/ultralytics) – object detection
 - [CVAT](https://github.com/cvat-ai/cvat) (self-hosted) – annotation
-- FFmpeg – frame extraction
+- FFmpeg – frame extraction and video encoding
 - Training on a local GPU (NVIDIA RTX 3070) via WSL2
 
 ## How it works
-1. Input: match video recording (e.g. `.mp4`)
-2. Detection of players, referees and the ball on each frame (YOLOv8)
-3. Filtering detections (one ball per frame, only people inside the pitch)
-4. Tracking players across frames
-5. Assigning players to teams (jersey color)
-6. Mapping positions from the image to pitch coordinates
-7. Identifying goalkeepers by position (player closest to own goal)
-8. Calculating statistics
-9. Output: team statistics (and optionally an annotated video)
+Matches are recorded with a Veo camera whose view follows the ball, so the whole pitch
+is never visible in one frame and the camera moves all the time.
+
+1. **Detection** – players, referees and ball candidates on every frame (YOLOv8)
+2. **Ball tracking** – the real ball is chosen from the candidates using its trajectory,
+   distance to players and to the frame centre (the camera follows the ball); spare balls
+   next to the pitch are ignored and short gaps are filled by interpolation
+3. **Team assignment** – players are split into two teams by jersey color (K-means);
+   players in a different kit (goalkeepers, substitutes) are marked as unknown and players
+   wearing the referee's color are relabeled as referee
+4. **Ball possession** – the player closest to the ball (in player heights, independent of
+   camera zoom) controls it; possession changes only after the other team controls the
+   ball for several frames, and stays with the passing team while the ball travels
+
+## Example result
+Ball possession over a full match (share of team 0, 30 s rolling window):
+
+![Ball possession](docs/possession_mecz1.png)
+
+## Usage
+Analyze a whole match with one command:
+```bash
+python analyze.py videos/mecz1.mp4 --model runs/detect/runs/v6/weights/best.pt
+python analyze.py videos/mecz1.mp4 --model ... --preview        # + preview video
+python analyze.py videos/mecz1.mp4 --model ... --from-step teams  # rerun later steps only
+```
+Results are saved to `~/football/analysis/<video name>/`: `detections.csv`, `ball.csv`,
+`teams.csv`, `possession.csv`, `possession.png` and `summary.json`.
+Finished steps are skipped, so changing e.g. possession parameters does not rerun the detection.
+
+## Scripts
+| Script | Description |
+|---|---|
+| `analyze.py` | Runs the whole analysis for one match |
+| `detect.py` | Detection with filtering, saves detections to CSV (optional preview video) |
+| `ball_track.py` | Chooses the real ball from candidates and fills short gaps |
+| `teams.py` | Assigns players to teams by jersey color |
+| `possession.py` | Ball possession per team: summary, per-frame CSV, plot, preview video |
+| `prelabel.py` | Pre-annotation of frames for CVAT |
+| `remap_classes.py` | One-time conversion of labels from 4 classes to 3 classes |
+| `pick_points.py` | Marks the pitch outline on a frame (for static cameras only) |
 
 ## Dataset
 - Frames extracted from match recordings with FFmpeg
@@ -30,7 +62,7 @@ overall performance.
 - Annotation guidelines: [`ANNOTATION.md`](ANNOTATION.md)
 - Classes: `player`, `referee`, `ball`
 - Goalkeepers are annotated as `player` – on a single wide camera they are too small
-  to be reliably distinguished visually, so they are identified later by position
+  to be reliably distinguished visually
 - Train/validation split by match (not by frame) to avoid data leakage
 - Videos, frames and the dataset are not stored in this repository
 
@@ -48,12 +80,6 @@ overall performance.
 5. Correct the annotations according to `ANNOTATION.md`
 6. Export the task as **Ultralytics YOLO Detection** (with images) and add it to the dataset
 
-## Scripts
-| Script | Description |
-|---|---|
-| `prelabel.py` | Runs a YOLO model on extracted frames and creates a ZIP ready to import into CVAT |
-| `remap_classes.py` | One-time conversion of labels from 4 classes (with goalkeeper) to 3 classes |
-
 ## Installation
 ```bash
 git clone https://github.com/hubixek/Football-performance-analyst.git
@@ -62,7 +88,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-FFmpeg is required for frame extraction. A CUDA-capable GPU is recommended for training.
+FFmpeg is required. A CUDA-capable GPU is recommended for training and detection.
 
 ## Training
 ```bash
@@ -74,7 +100,7 @@ yolo train model=yolov8m.pt data=dataset/data.yaml epochs=300 imgsz=1920 batch=2
 Frames are 1920×1080, so training at `imgsz=1920` keeps the full resolution,
 which matters for the small ball.
 
-## Results
+## Detection results
 All models are evaluated on the same validation match (91 frames).
 
 ### v6 (YOLOv8m, imgsz=1920) – current model
@@ -88,7 +114,8 @@ Data: 4 training matches. Best epoch 165 of 265.
 | ball | 0.752 | 0.357 |
 
 The larger model raised ball recall from 0.62 to 0.80 at the cost of lower ball
-precision (0.66) and ~2x slower inference.
+precision (0.66) and ~2x slower inference. Extra ball detections are handled by ball tracking.
+
 ### v5 (YOLOv8s, imgsz=1920) – 2 more matches
 Data: 4 training matches.
 
@@ -124,7 +151,7 @@ Data: 2 training matches.
 | referee | 0.903 | 0.770 |
 | ball | 0.493 | 0.237 |
 
-In the 4-class setup, most goalkeepers were classified as `player`, so the classes were merged.
+In v2, most goalkeepers were classified as `player`, so the classes were merged.
 
 ### v2 (YOLOv8s, imgsz=1280) – 4 classes
 Data: 2 training matches.
@@ -153,19 +180,18 @@ Data: 1 training match.
 
 ## TODO
 - [x] Annotation workflow (pre-annotation + CVAT)
-- [x] Detection models (v1–v6)
-- [x] Merge goalkeeper into player
-- [x] Training at full frame resolution
-- [ ] Filtering detections (one ball per frame, pitch boundary)
-- [ ] Player tracking (ByteTrack)
-- [ ] Team assignment (jersey color)
-- [ ] Mapping positions to pitch coordinates (homography)
+- [x] Detection models (v1–v6), training at full resolution
+- [x] Ball tracking (candidate selection, spare-ball handling, interpolation)
+- [x] Team assignment by jersey color
+- [x] Ball possession stats
+- [x] One-command analysis (`analyze.py`)
+- [ ] Second validation match
+- [ ] Pitch keypoint model (per-frame homography for the moving camera)
+- [ ] Filtering people outside the pitch
+- [ ] Player tracking (stable IDs, smoother team assignment)
 - [ ] Goalkeeper identification by position
-- [ ] Ball possession stats
 - [ ] Player positioning and heatmaps
 - [ ] Overall team performance score
-- [ ] Export results to CSV
-- [ ] One-command pipeline for dataset building and training
 
 ## Author
 Hubert – [GitHub](https://github.com/hubixek)
