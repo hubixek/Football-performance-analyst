@@ -28,7 +28,7 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 from scipy.optimize import least_squares
 
-from calibrate import densify, pitch_lines, pitch_to_pixels
+from calibrate import densify, pitch_lines, pitch_to_pixels, pixels_to_pitch
 
 
 def median_background(video, half, n_frames, start_s, end_s):
@@ -65,32 +65,39 @@ def pitch_area(calib, pitch, size, margin, step=8):
     """Mask of image pixels that lie on the pitch (+ margin) according to the calibration."""
     w, h = size
     xs, ys = np.meshgrid(np.arange(0, w, step) + step / 2, np.arange(0, h, step) + step / 2)
-    pts = np.stack([xs.ravel(), ys.ravel()], axis=1).astype(np.float32).reshape(-1, 1, 2)
-    if calib["model"] == "distorted":
-        K, d = np.array(calib["K"]), np.array(calib["dist"])
-        pts = cv2.undistortPoints(pts, K, d, P=K)
-    pts = pts.reshape(-1, 2)
-    hom = np.hstack([pts, np.ones((len(pts), 1))]) @ np.array(calib["H"]).T
-    # pixels above the horizon map "behind" the camera: the homogeneous w changes sign
-    centre = np.array([pitch["length_m"] / 2, pitch["width_m"] / 2])
-    ref_px = cv2.perspectiveTransform(centre.reshape(1, 1, 2).astype(np.float64),
-                                      np.linalg.inv(np.array(calib["H"]))).reshape(2)
-    ref_w = (np.array([*ref_px, 1.0]) @ np.array(calib["H"]).T)[2]
-    ok = np.sign(hom[:, 2]) == np.sign(ref_w)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        xy = hom[:, :2] / hom[:, 2:3]
+    with np.errstate(all="ignore"):
+        xy = pixels_to_pitch(calib, np.stack([xs.ravel(), ys.ravel()], axis=1))
     L, W = pitch["length_m"], pitch["width_m"]
+    if calib["model"] != "fisheye":
+        # homography models: pixels above the horizon map "behind" the camera -> keep only
+        # pixels whose mapped point projects back onto themselves
+        back = pitch_to_pixels(calib, np.nan_to_num(xy, nan=1e6))
+        ok = np.linalg.norm(back - np.stack([xs.ravel(), ys.ravel()], axis=1), axis=1) < 2 * step
+    else:
+        ok = np.isfinite(xy).all(axis=1)
     ok &= (xy[:, 0] > -margin) & (xy[:, 0] < L + margin) & (xy[:, 1] > -margin) & (xy[:, 1] < W + margin)
     small = ok.reshape(xs.shape).astype(np.uint8) * 255
     return cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
 
 
+def n_params(ref):
+    return 6 if ref["model"] == "fisheye" else 8
+
+
 def with_correction(ref, params, scale):
-    """Reference calibration with a small homography correction C (in undistorted pixels)."""
+    """Reference calibration with a small correction of the camera position.
+
+    fisheye: correction of the pose (rotation, translation); homography models: a small
+    homography correction C in undistorted pixels.
+    """
+    out = dict(ref)
+    if ref["model"] == "fisheye":
+        out["rvec"] = (np.array(ref["rvec"]) + params[:3] * 0.1).tolist()
+        out["tvec"] = (np.array(ref["tvec"]) + params[3:6]).tolist()
+        return out
     C = np.eye(3) + np.append(params, 0).reshape(3, 3)
     T = np.diag([scale, scale, 1.0])
     Cpx = np.linalg.inv(T) @ C @ T   # correction defined in normalised coordinates
-    out = dict(ref)
     out["H"] = (np.array(ref["H"]) @ Cpx).tolist()
     return out
 
@@ -124,13 +131,14 @@ def main():
     # pitch-line points that are visible in the reference view
     world = np.vstack([densify(l) if len(l) < 10 else l for l in pitch_lines(pitch)])
     px = pitch_to_pixels(ref, world)
+    px = np.nan_to_num(px, nan=-1e6)
     inside = (px[:, 0] > 5) & (px[:, 0] < w - 5) & (px[:, 1] > 5) & (px[:, 1] < h - 5)
     world = world[inside]
     if len(world) < 50:
         raise SystemExit("Too few pitch lines visible with the reference calibration")
 
     def sample(calib, cap):
-        p = pitch_to_pixels(calib, world)
+        p = np.nan_to_num(pitch_to_pixels(calib, world), nan=-1e6)
         # bilinear sampling keeps the cost smooth, so the optimiser gets useful gradients
         d = map_coordinates(dist, [np.clip(p[:, 1], 0, h - 1), np.clip(p[:, 0], 0, w - 1)],
                             order=1, mode="nearest")
@@ -139,7 +147,7 @@ def main():
         return np.minimum(d, cap)
 
     scale = 1.0 / w
-    params = np.zeros(8)
+    params = np.zeros(n_params(ref))
     before = sample(ref, 1e9)
     # coarse-to-fine: wide basin first, then precise
     for cap in (80, 40, 15, 6):
@@ -165,7 +173,10 @@ def main():
     check[mask > 0] = (0.5 * check[mask > 0] + [0, 0, 127]).astype(np.uint8)
     for line in pitch_lines(pitch):
         p = pitch_to_pixels(calib, densify(line) if len(line) < 10 else line)
-        cv2.polylines(check, [p.round().astype(np.int32)], False, (0, 255, 255), 2)
+        for seg in np.split(p, np.where(~np.isfinite(p).all(axis=1))[0]):
+            seg = seg[np.isfinite(seg).all(axis=1)]
+            if len(seg) > 1:
+                cv2.polylines(check, [seg.round().astype(np.int32)], False, (0, 255, 255), 2)
     cv2.imwrite(str(out.with_suffix(".check.jpg")), check)
     print(f"Check image: {out.with_suffix('.check.jpg')}  (yellow = calibration, red = detected lines)")
 

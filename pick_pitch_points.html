@@ -15,13 +15,17 @@
 </head>
 <body>
 <header>
-  <input type="file" id="file" accept="image/*">
-  <label>Punkt: <select id="kp"></select></label>
+  <label>Klatka: <input type="file" id="file" accept="image/*"></label>
+  <label>Wczytaj punkty: <input type="file" id="json" accept=".json"></label>
+  <label>Tryb: <select id="mode"><option value="kp">Punkty (przecięcia)</option><option value="line">Punkty na linii</option></select></label>
+  <label id="kpLabel">Punkt: <select id="kp"></select></label>
+  <label id="lineLabel" style="display:none">Linia: <select id="ln"></select></label>
   <button id="skip">Pomiń punkt (niewidoczny)</button>
   <button id="undo">Cofnij</button>
   <button id="save">Zapisz JSON</button>
-  <span class="hint">Klik = postaw wybrany punkt · prawy klik = usuń najbliższy · po postawieniu wybiera się następny punkt</span>
+  <span class="hint">Punkty: klik = wybrany punkt, potem następny. Linie: <b>najpierw wybierz linię z listy</b>, potem klikaj co kilkadziesiąt pikseli wzdłuż niej. Shift+klik na kropce = przypisz ją do wybranej linii. Prawy klik = usuń najbliższy.</span>
 </header>
+<div id="current" style="padding:6px 14px;font-size:16px;font-weight:bold;background:#333"></div>
 <div id="wrap"><canvas id="c"></canvas></div>
 <div id="list">Wczytaj klatkę (jedną połówkę obrazu).</div>
 <script>
@@ -29,6 +33,32 @@ const NAMES = ["corner_top_left","halfway_top","corner_top_right","corner_bottom
   "corner_bottom_left","left_box_goalline_top","left_box_corner_top","left_box_corner_bottom",
   "left_box_goalline_bottom","right_box_goalline_top","right_box_corner_top","right_box_corner_bottom",
   "right_box_goalline_bottom","circle_top","circle_bottom","circle_left","circle_right","centre_spot"];
+const LINES = {touch_far: "linia boczna dalsza (top)", touch_near: "linia boczna bliższa (bottom)",
+  goal_left: "linia końcowa lewa", goal_right: "linia końcowa prawa", halfway: "linia środkowa",
+  box_left_front: "pole karne lewe – linia przednia", box_left_top: "pole karne lewe – bok dalszy",
+  box_left_bottom: "pole karne lewe – bok bliższy", box_right_front: "pole karne prawe – linia przednia",
+  box_right_top: "pole karne prawe – bok dalszy", box_right_bottom: "pole karne prawe – bok bliższy",
+  circle: "koło środkowe"};
+const LINE_COLORS = ["#00e5ff","#ff9800","#76ff03","#e040fb","#ffeb3b","#40c4ff","#ff5252","#b2ff59","#ffab40","#ea80fc","#18ffff","#ffffff"];
+const mode = document.getElementById("mode"), lnSel = document.getElementById("ln");
+Object.entries(LINES).forEach(([k, v]) => lnSel.add(new Option(v, k)));
+function showCurrent() {
+  const el = document.getElementById("current");
+  if (mode.value === "line") {
+    const names = Object.keys(LINES);
+    el.innerHTML = `Tryb: punkty na linii · teraz klikasz: <span style="color:${LINE_COLORS[names.indexOf(lnSel.value) % LINE_COLORS.length]}">● ${LINES[lnSel.value]}</span>`;
+  } else {
+    el.textContent = `Tryb: punkty przecięć · teraz: ${sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : ""}`;
+  }
+}
+lnSel.onchange = () => showCurrent();
+mode.onchange = () => {
+  document.getElementById("kpLabel").style.display = mode.value === "kp" ? "" : "none";
+  document.getElementById("lineLabel").style.display = mode.value === "line" ? "" : "none";
+  document.getElementById("skip").style.display = mode.value === "kp" ? "" : "none";
+  showCurrent();
+};
+let linePts = [];
 const sel = document.getElementById("kp"), canvas = document.getElementById("c"), ctx = canvas.getContext("2d");
 const list = document.getElementById("list");
 NAMES.forEach((n, i) => sel.add(new Option(`${String(i).padStart(2, "0")} ${n}`, i)));
@@ -38,11 +68,22 @@ document.getElementById("file").onchange = e => {
   const f = e.target.files[0]; if (!f) return;
   fileName = f.name.replace(/\.[^.]+$/, "");
   const im = new Image();
-  im.onload = () => { img = im; canvas.width = im.width; canvas.height = im.height; points = {}; history = []; draw(); };
+  im.onload = () => { img = im; canvas.width = im.width; canvas.height = im.height; points = {}; linePts = []; history = []; draw(); };
   im.src = URL.createObjectURL(f);
 };
 
-function next() { if (+sel.value < NAMES.length - 1) sel.value = +sel.value + 1; }
+document.getElementById("json").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  f.text().then(t => {
+    const d = JSON.parse(t);
+    points = {}; (d.points || []).forEach(p => points[p.id] = { u: p.u, v: p.v });
+    linePts = (d.lines || []).map(p => ({ line: p.line, u: p.u, v: p.v }));
+    history = []; draw();
+  });
+};
+
+function next() { if (+sel.value < NAMES.length - 1) sel.value = +sel.value + 1; showCurrent(); }
+sel.onchange = () => showCurrent();
 
 function draw() {
   if (!img) return;
@@ -54,31 +95,56 @@ function draw() {
     ctx.fillStyle = "#000"; ctx.fillText(id, p.u + 7, p.v - 5);
     ctx.fillStyle = "#ffcc00"; ctx.fillText(id, p.u + 6, p.v - 6);
   }
-  list.textContent = Object.keys(points).length
+  const names = Object.keys(LINES);
+  for (const p of linePts) {
+    ctx.fillStyle = LINE_COLORS[names.indexOf(p.line) % LINE_COLORS.length];
+    ctx.beginPath(); ctx.arc(p.u, p.v, 4, 0, 2 * Math.PI); ctx.fill();
+  }
+  const counts = {};
+  linePts.forEach(p => counts[p.line] = (counts[p.line] || 0) + 1);
+  const lineSummary = Object.entries(counts).map(([k, n]) => `${LINES[k]}: ${n}`).join(" · ");
+  showCurrent();
+  list.textContent = (lineSummary ? "Linie – " + lineSummary + "\n" : "") + (Object.keys(points).length
     ? Object.entries(points).map(([id, p]) => `${String(id).padStart(2, "0")} ${NAMES[id].padEnd(26)} u=${p.u.toFixed(1)} v=${p.v.toFixed(1)}`).join("\n")
-    : "Brak punktów. Wybierz punkt z listy i kliknij na obrazie.";
+    : "Brak punktów przecięć. Wybierz punkt z listy i kliknij na obrazie.");
 }
 
 canvas.addEventListener("click", e => {
   if (!img) return;
   const r = canvas.getBoundingClientRect();
   const u = (e.clientX - r.left) * canvas.width / r.width, v = (e.clientY - r.top) * canvas.height / r.height;
+  if (e.shiftKey) {
+    // reassign the nearest line point to the selected line
+    let bi = -1, bd = 1e9;
+    linePts.forEach((p, i) => { const d = Math.hypot(p.u - u, p.v - v); if (d < bd) { bd = d; bi = i; } });
+    if (bi >= 0 && bd < 20) { linePts[bi].line = lnSel.value; draw(); }
+    return;
+  }
+  if (mode.value === "line") { linePts.push({ line: lnSel.value, u, v }); history.push({ line: true }); draw(); return; }
   points[sel.value] = { u, v }; history.push(sel.value); next(); draw();
 });
 canvas.addEventListener("contextmenu", e => {
   e.preventDefault(); if (!img) return;
   const r = canvas.getBoundingClientRect();
   const u = (e.clientX - r.left) * canvas.width / r.width, v = (e.clientY - r.top) * canvas.height / r.height;
-  let best = null, bd = 1e9;
-  for (const [id, p] of Object.entries(points)) { const d = Math.hypot(p.u - u, p.v - v); if (d < bd) { bd = d; best = id; } }
-  if (best !== null && bd < 40) { delete points[best]; sel.value = best; draw(); }
+  let best = null, bd = 1e9, bestLine = -1;
+  for (const [id, p] of Object.entries(points)) { const d = Math.hypot(p.u - u, p.v - v); if (d < bd) { bd = d; best = id; bestLine = -1; } }
+  linePts.forEach((p, i) => { const d = Math.hypot(p.u - u, p.v - v); if (d < bd) { bd = d; bestLine = i; best = null; } });
+  if (bd > 40) return;
+  if (bestLine >= 0) linePts.splice(bestLine, 1); else if (best !== null) { delete points[best]; sel.value = best; }
+  draw();
 });
 document.getElementById("skip").onclick = () => next();
-document.getElementById("undo").onclick = () => { const id = history.pop(); if (id !== undefined) { delete points[id]; sel.value = id; draw(); } };
+document.getElementById("undo").onclick = () => {
+  const h = history.pop(); if (h === undefined) return;
+  if (h && h.line) linePts.pop(); else { delete points[h]; sel.value = h; }
+  draw();
+};
 document.getElementById("save").onclick = () => {
   if (!img) return;
   const data = { image: fileName, width: img.width, height: img.height,
-    points: Object.entries(points).map(([id, p]) => ({ id: +id, name: NAMES[id], u: +p.u.toFixed(2), v: +p.v.toFixed(2) })) };
+    points: Object.entries(points).map(([id, p]) => ({ id: +id, name: NAMES[id], u: +p.u.toFixed(2), v: +p.v.toFixed(2) })),
+    lines: linePts.map(p => ({ line: p.line, u: +p.u.toFixed(2), v: +p.v.toFixed(2) })) };
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
   a.download = `${fileName}_points.json`; a.click();
