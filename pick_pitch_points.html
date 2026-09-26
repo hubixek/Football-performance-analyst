@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Kalibracja boiska – zaznaczanie punktów</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #1e1e1e; color: #eee; }
+  header { padding: 10px 14px; background: #2b2b2b; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; position: sticky; top: 0; z-index: 2; }
+  select, button, input { font-size: 14px; padding: 4px 8px; }
+  #wrap { overflow: auto; max-height: calc(100vh - 170px); }
+  canvas { display: block; cursor: crosshair; }
+  #list { padding: 8px 14px; font-family: monospace; font-size: 13px; white-space: pre-wrap; background: #252525; max-height: 110px; overflow: auto; }
+  .hint { color: #aaa; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <input type="file" id="file" accept="image/*">
+  <label>Punkt: <select id="kp"></select></label>
+  <button id="skip">Pomiń punkt (niewidoczny)</button>
+  <button id="undo">Cofnij</button>
+  <button id="save">Zapisz JSON</button>
+  <span class="hint">Klik = postaw wybrany punkt · prawy klik = usuń najbliższy · po postawieniu wybiera się następny punkt</span>
+</header>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="list">Wczytaj klatkę (jedną połówkę obrazu).</div>
+<script>
+const NAMES = ["corner_top_left","halfway_top","corner_top_right","corner_bottom_right","halfway_bottom",
+  "corner_bottom_left","left_box_goalline_top","left_box_corner_top","left_box_corner_bottom",
+  "left_box_goalline_bottom","right_box_goalline_top","right_box_corner_top","right_box_corner_bottom",
+  "right_box_goalline_bottom","circle_top","circle_bottom","circle_left","circle_right","centre_spot"];
+const sel = document.getElementById("kp"), canvas = document.getElementById("c"), ctx = canvas.getContext("2d");
+const list = document.getElementById("list");
+NAMES.forEach((n, i) => sel.add(new Option(`${String(i).padStart(2, "0")} ${n}`, i)));
+let img = null, fileName = "frame", points = {}, history = [];
+
+document.getElementById("file").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  fileName = f.name.replace(/\.[^.]+$/, "");
+  const im = new Image();
+  im.onload = () => { img = im; canvas.width = im.width; canvas.height = im.height; points = {}; history = []; draw(); };
+  im.src = URL.createObjectURL(f);
+};
+
+function next() { if (+sel.value < NAMES.length - 1) sel.value = +sel.value + 1; }
+
+function draw() {
+  if (!img) return;
+  ctx.drawImage(img, 0, 0);
+  ctx.font = "bold 16px sans-serif";
+  for (const [id, p] of Object.entries(points)) {
+    ctx.strokeStyle = "#ff3b30"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(p.u - 10, p.v); ctx.lineTo(p.u + 10, p.v); ctx.moveTo(p.u, p.v - 10); ctx.lineTo(p.u, p.v + 10); ctx.stroke();
+    ctx.fillStyle = "#000"; ctx.fillText(id, p.u + 7, p.v - 5);
+    ctx.fillStyle = "#ffcc00"; ctx.fillText(id, p.u + 6, p.v - 6);
+  }
+  list.textContent = Object.keys(points).length
+    ? Object.entries(points).map(([id, p]) => `${String(id).padStart(2, "0")} ${NAMES[id].padEnd(26)} u=${p.u.toFixed(1)} v=${p.v.toFixed(1)}`).join("\n")
+    : "Brak punktów. Wybierz punkt z listy i kliknij na obrazie.";
+}
+
+canvas.addEventListener("click", e => {
+  if (!img) return;
+  const r = canvas.getBoundingClientRect();
+  const u = (e.clientX - r.left) * canvas.width / r.width, v = (e.clientY - r.top) * canvas.height / r.height;
+  points[sel.value] = { u, v }; history.push(sel.value); next(); draw();
+});
+canvas.addEventListener("contextmenu", e => {
+  e.preventDefault(); if (!img) return;
+  const r = canvas.getBoundingClientRect();
+  const u = (e.clientX - r.left) * canvas.width / r.width, v = (e.clientY - r.top) * canvas.height / r.height;
+  let best = null, bd = 1e9;
+  for (const [id, p] of Object.entries(points)) { const d = Math.hypot(p.u - u, p.v - v); if (d < bd) { bd = d; best = id; } }
+  if (best !== null && bd < 40) { delete points[best]; sel.value = best; draw(); }
+});
+document.getElementById("skip").onclick = () => next();
+document.getElementById("undo").onclick = () => { const id = history.pop(); if (id !== undefined) { delete points[id]; sel.value = id; draw(); } };
+document.getElementById("save").onclick = () => {
+  if (!img) return;
+  const data = { image: fileName, width: img.width, height: img.height,
+    points: Object.entries(points).map(([id, p]) => ({ id: +id, name: NAMES[id], u: +p.u.toFixed(2), v: +p.v.toFixed(2) })) };
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+  a.download = `${fileName}_points.json`; a.click();
+};
+</script>
+</body>
+</html>
