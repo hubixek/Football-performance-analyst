@@ -1,0 +1,29 @@
+{
+  "length_m": 56,
+  "width_m": 32,
+  "penalty_area_depth_m": 9,
+  "penalty_area_width_m": 20,
+  "centre_circle_radius_m": 6,
+  "keypoints": [
+    {"id": 0,  "name": "corner_top_left",          "x": 0,  "y": 0},
+    {"id": 1,  "name": "halfway_top",              "x": 28, "y": 0},
+    {"id": 2,  "name": "corner_top_right",         "x": 56, "y": 0},
+    {"id": 3,  "name": "corner_bottom_right",      "x": 56, "y": 32},
+    {"id": 4,  "name": "halfway_bottom",           "x": 28, "y": 32},
+    {"id": 5,  "name": "corner_bottom_left",       "x": 0,  "y": 32},
+    {"id": 6,  "name": "left_box_goalline_top",    "x": 0,  "y": 6},
+    {"id": 7,  "name": "left_box_corner_top",      "x": 9,  "y": 6},
+    {"id": 8,  "name": "left_box_corner_bottom",   "x": 9,  "y": 26},
+    {"id": 9,  "name": "left_box_goalline_bottom", "x": 0,  "y": 26},
+    {"id": 10, "name": "right_box_goalline_top",   "x": 56, "y": 6},
+    {"id": 11, "name": "right_box_corner_top",     "x": 47, "y": 6},
+    {"id": 12, "name": "right_box_corner_bottom",  "x": 47, "y": 26},
+    {"id": 13, "name": "right_box_goalline_bottom","x": 56, "y": 26},
+    {"id": 14, "name": "circle_top",               "x": 28, "y": 10},
+    {"id": 15, "name": "circle_bottom",            "x": 28, "y": 22},
+    {"id": 16, "name": "circle_left",              "x": 22, "y": 16},
+    {"id": 17, "name": "circle_right",             "x": 34, "y": 16},
+    {"id": 18, "name": "centre_spot",              "x": 28, "y": 16}
+  ],
+  "flip_idx": [2, 1, 0, 5, 4, 3, 10, 11, 12, 13, 6, 7, 8, 9, 14, 15, 17, 16, 18]
+}
