@@ -1,0 +1,22 @@
+{
+  "name": "mecz2",
+  "video": "mecz2_dual.mp4",
+  "halves": [
+    {
+      "start": "00:00:20",
+      "end": "00:25:15",
+      "start_s": 20.0,
+      "end_s": 1515.0
+    },
+    {
+      "start": "00:27:44",
+      "end": "00:37:30",
+      "start_s": 1664.0,
+      "end_s": 2250.0
+    }
+  ],
+  "calibration": {
+    "top": "calib/mecz2_top.json",
+    "bottom": "calib/mecz2_bottom.json"
+  }
+}
