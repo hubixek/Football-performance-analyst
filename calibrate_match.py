@@ -26,10 +26,105 @@ from scipy.ndimage import map_coordinates
 from scipy.optimize import least_squares
 from scipy.spatial import cKDTree
 
-from auto_calibrate import line_mask, median_background, pitch_area
+from auto_calibrate import line_mask, pitch_area
 from calibrate import _look_at, densify, fisheye_project, pitch_lines
 
 HALVES = ("top", "bottom")
+
+
+def read_half(video, half, n_frames, start_s, end_s, pair_s=0.4, with_pairs=True):
+    """Frames of one lens spread over the playing time, their median (the empty pitch) and, for every frame,
+    the frame pair_s seconds later (moving people for the fallback without a model)."""
+    cap = cv2.VideoCapture(str(video))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    first = int(start_s * fps)
+    last = min(total - 1, int(end_s * fps)) if end_s else total - 1
+    frames, pairs = [], []
+    step = max(1, int(round(pair_s * fps)))
+
+    def crop(img):
+        h = img.shape[0] // 2
+        return img[:h] if half == "top" else img[h:2 * h]
+    for idx in np.linspace(first, max(first, last - step), n_frames).astype(int):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
+        ok, img = cap.read()
+        if not ok:
+            continue
+        frames.append(crop(img))
+        if with_pairs:
+            for _ in range(step - 1):
+                cap.grab()
+            ok, img2 = cap.read()
+            if ok:
+                pairs.append((frames[-1], crop(img2)))
+    cap.release()
+    if len(frames) < 5:
+        raise SystemExit("Could not read enough frames")
+    bg = np.empty_like(frames[0])
+    for y0 in range(0, bg.shape[0], 64):                               # median in strips: little memory
+        bg[y0:y0 + 64] = np.median(np.stack([f[y0:y0 + 64] for f in frames]), axis=0).astype(np.uint8)
+    return frames, pairs, bg
+
+
+def yolo_feet(frames, model_path, conf=0.35, batch=4):
+    """Where people stood, from the detection model (player and referee boxes): the middle of the lower edge of each box.
+    Independent of the light, the colour of the turf and trees moving in the wind."""
+    from ultralytics import YOLO
+    model = YOLO(str(model_path))
+    keep = {i for i, n in model.names.items() if n in ("player", "referee", "goalkeeper")}
+    pts = []
+    for i in range(0, len(frames), batch):
+        for r in model.predict(frames[i:i + batch], imgsz=2048, conf=conf, verbose=False):
+            for c, (x1, y1, x2, y2) in zip(r.boxes.cls.tolist(), r.boxes.xyxy.tolist()):
+                if int(c) in keep:
+                    pts.append(((x1 + x2) / 2.0, y2))
+    return np.array(pts, float).reshape(-1, 2)
+
+
+def motion_feet(pairs, diff_thr=28):
+    """Fallback without a model: people moving between two frames 0.4 s apart (the light does not change in that time,
+    unlike over the whole match). The lowest point of every person-shaped moving blob."""
+    pts = []
+    for a_img, b_img in pairs:
+        h, w = a_img.shape[:2]
+        d = cv2.absdiff(a_img, b_img).max(axis=2)
+        m = cv2.medianBlur((d > diff_thr).astype(np.uint8) * 255, 5)
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 9)))
+        n, _, st, _ = cv2.connectedComponentsWithStats(m, 8)
+        for i in range(1, n):
+            x, y, bw, bh, area = st[i]
+            if not (60 <= area <= 0.02 * h * w) or bh < 1.1 * bw or area < 0.3 * bw * bh or y + bh >= h - 2:
+                continue
+            pts.append((x + bw / 2.0, y + bh))
+    return np.array(pts, float).reshape(-1, 2)
+
+
+def activity_region(pts, shape, cell=40, margin=30):
+    """The part of the image where the pitch can be: below the upper edge of where people stood, with a margin for
+    the far lines. The positions are counted on a grid; only the largest connected busy area counts (the pitch), so
+    scattered false detections separated from it (trees in the wind, a building) are ignored. None if too few positions."""
+    h, w = shape
+    if len(pts) < 60:
+        return None
+    gy, gx = int(np.ceil(h / cell)), int(np.ceil(w / cell))
+    counts = np.zeros((gy, gx), np.int32)
+    np.add.at(counts, (np.clip((pts[:, 1] - 1) // cell, 0, gy - 1).astype(int), np.clip(pts[:, 0] // cell, 0, gx - 1).astype(int)), 1)
+    dens = cv2.GaussianBlur(counts.astype(np.float32), (0, 0), 1.0)          # a few players per cell: smooth first
+    busy = dens >= 0.25 * np.median(dens[counts > 0])
+    busy = cv2.morphologyEx(busy.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    n, lab = cv2.connectedComponents(busy, connectivity=8)
+    if n <= 1:
+        return None
+    areas = np.array([(lab == i).sum() for i in range(1, n)])
+    pitch = lab == 1 + int(np.argmax(areas))                                   # the biggest area (a crowded bench is small)
+    cols = np.flatnonzero(pitch.any(axis=0))
+    if len(cols) < 3:
+        return None
+    tops = np.array([np.argmax(pitch[:, c]) * cell for c in cols], float)   # upper edge of the busy area per grid column
+    top = np.interp(np.arange(w), cols * cell + cell / 2, tops)             # constant beyond the outermost columns
+    top = cv2.GaussianBlur(top.reshape(1, -1).astype(np.float32), (0, 0), cell).ravel()
+    return (np.arange(h)[:, None] >= (top - margin)[None, :]).astype(np.uint8) * 255
 
 
 def rot(rvec):
@@ -108,33 +203,9 @@ def half_residuals(calib, ev, world, cap):
     return fwd, rev, int(ok.sum())
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("video", help="dual-lens match video")
-    ap.add_argument("--name", required=True, help="name of the new match, e.g. mecz1")
-    ap.add_argument("--ref", required=True, help="reference match with a good calibration, e.g. mecz2")
-    ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"))
-    ap.add_argument("--pitch", required=True)
-    ap.add_argument("--match", help="match config (half times) - background from the playing time only")
-    ap.add_argument("--frames", type=int, default=60)
-    a = ap.parse_args()
-
-    cdir = Path(a.calib_dir).expanduser()
-    pitch = json.loads(Path(a.pitch).read_text())
+def fit_camera(masks, dev, pitch, log=print):
+    """Camera pose (+ small lens corrections) for which the model pitch lines cover the detected lines in both halves."""
     L, W = pitch["length_m"], pitch["width_m"]
-    dev = device_model(*(json.loads((cdir / f"{a.ref}_{h}.json").read_text()) for h in HALVES))
-
-    start_s, end_s = 0, 0
-    if a.match:
-        cfg = json.loads(Path(a.match).read_text())
-        start_s, end_s = cfg["halves"][0]["start_s"], cfg["halves"][-1]["end_s"]
-
-    bgs, masks = {}, {}
-    for half in HALVES:
-        bgs[half] = median_background(Path(a.video).expanduser(), half, a.frames, start_s, end_s)
-        masks[half] = line_mask(bgs[half])
-        print(f"{half:6s}: {int((masks[half] > 0).sum())} line pixels detected")
-
     world = np.vstack([densify(l, 25) if len(l) < 10 else l for l in pitch_lines(pitch)])
 
     def make_residuals(scale, cap, with_f):
@@ -172,7 +243,7 @@ def main():
         if best is None or r.cost < best.cost:
             best = r
     C = best.x[3:6]
-    print(f"Camera: x={C[0]:.1f} m, y={C[1]:.1f} m, height={-C[2]:.1f} m (coarse)")
+    log(f"Camera: x={C[0]:.1f} m, y={C[1]:.1f} m, height={-C[2]:.1f} m (coarse)")
 
     # 2) refinement, first with a wide capture range, then precise; each lens may correct its
     #    focal length (+-12 %), distortion k1 (+-0.15) and image centre (+-80 px)
@@ -187,10 +258,72 @@ def main():
     corr = {"top": tuple(x[8:11]), "bottom": tuple(x[11:14])}
     calibs = lens_calibs(dev, x[:3], x[3:6], (x[6], x[7]), corr)
     C = x[3:6]
-    print(f"Camera: x={C[0]:.1f} m, y={C[1]:.1f} m, height={-C[2]:.1f} m")
+    log(f"Camera: x={C[0]:.1f} m, y={C[1]:.1f} m, height={-C[2]:.1f} m")
     for i, half in enumerate(HALVES):
         dk1, dcx, dcy = corr[half]
-        print(f"  {half:6s} lens corrections: focal x{x[6 + i]:.3f}, k1 {dk1:+.3f}, centre {dcx:+.0f},{dcy:+.0f} px")
+        log(f"  {half:6s} lens corrections: focal x{x[6 + i]:.3f}, k1 {dk1:+.3f}, centre {dcx:+.0f},{dcy:+.0f} px")
+
+
+    return calibs, x
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("video", help="dual-lens match video")
+    ap.add_argument("--name", required=True, help="name of the new match, e.g. mecz1")
+    ap.add_argument("--ref", required=True, help="reference match with a good calibration, e.g. mecz2")
+    ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"))
+    ap.add_argument("--pitch", required=True)
+    ap.add_argument("--match", help="match config (half times) - background from the playing time only")
+    ap.add_argument("--frames", type=int, default=100, help="frames per lens for the empty pitch and the player positions")
+    ap.add_argument("--model", default=str(Path.home() / "football" / "runs" / "detect" / "runs" / "v7_dual" / "weights" / "best.pt"),
+                    help="detection model: where the players stood limits the area of the pitch lines (else: movement)")
+    ap.add_argument("--save-masks", action="store_true", help="save <name>_<lens>.mask.jpg: detected lines (red), player positions "
+                    "(yellow) and the area kept (bright)")
+    a = ap.parse_args()
+
+    cdir = Path(a.calib_dir).expanduser()
+    pitch = json.loads(Path(a.pitch).read_text())
+    L, W = pitch["length_m"], pitch["width_m"]
+    dev = device_model(*(json.loads((cdir / f"{a.ref}_{h}.json").read_text()) for h in HALVES))
+
+    start_s, end_s = 0, 0
+    if a.match:
+        cfg = json.loads(Path(a.match).read_text())
+        start_s, end_s = cfg["halves"][0]["start_s"], cfg["halves"][-1]["end_s"]
+
+    bgs, masks = {}, {}
+    for half in HALVES:
+        model_path = Path(a.model).expanduser() if a.model else None
+        use_model = model_path is not None and model_path.exists()
+        frames, pairs, bgs[half] = read_half(Path(a.video).expanduser(), half, a.frames, start_s, end_s, with_pairs=not use_model)
+        masks[half] = line_mask(bgs[half])
+        n_all = int((masks[half] > 0).sum())
+        if use_model:
+            pts, source = yolo_feet(frames[::max(1, len(frames) // 50)], model_path), "detection model"
+        else:
+            pts, source = motion_feet(pairs), "movement (no model found)"
+        region = activity_region(pts, masks[half].shape)
+        if region is not None and (region > 0).mean() > 0.9:
+            print(f"{half:6s}: WARNING the player positions cover almost the whole image - the area is not limited")
+            region = None
+        if region is not None:
+            masks[half] = cv2.bitwise_and(masks[half], region)       # no pitch lines above where the players stand
+            print(f"{half:6s}: {n_all} white-line pixels, {int((masks[half] > 0).sum())} of them where the players played "
+                  f"({len(pts)} player positions from the {source})")
+        else:
+            print(f"{half:6s}: {n_all} line pixels detected (too few player positions ({len(pts)}) to limit the area)")
+        if a.save_masks:
+            vis = bgs[half].copy()
+            if region is not None:
+                vis[region == 0] = (vis[region == 0] * 0.35).astype(np.uint8)
+            vis[masks[half] > 0] = (0, 0, 255)
+            for x, y in pts.astype(int):
+                cv2.circle(vis, (x, y), 3, (0, 255, 255), -1)
+            cv2.imwrite(str(cdir / f"{a.name}_{half}.mask.jpg"), vis)
+
+    calibs, x = fit_camera(masks, dev, pitch)
+    corr = {"top": tuple(x[8:11]), "bottom": tuple(x[11:14])}
 
     # 3) quality: share of detected line pixels explained by the model, per half
     ok_all = True

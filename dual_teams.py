@@ -38,12 +38,15 @@ def grass_color(img):
     return np.median(lab, axis=0)
 
 
+SHIRT = (0.15, 0.5)           # part of the box height used for the shirt colour (a narrower band 0.15-0.38 was tried: worse)
+
+
 def jersey_color(img, box, grass=None, grass_dist=20.0):
     """Median Lab colour of the shirt area, without pixels similar to the pitch surface."""
     x1, y1, x2, y2 = box
     w, h = x2 - x1, y2 - y1
     xa, xb = int(x1 + 0.25 * w), int(x2 - 0.25 * w)
-    ya, yb = int(y1 + 0.15 * h), int(y1 + 0.5 * h)
+    ya, yb = int(y1 + SHIRT[0] * h), int(y1 + SHIRT[1] * h)
     crop = img[max(ya, 0):max(yb, 0), max(xa, 0):max(xb, 0)]
     if crop.shape[0] < 2 or crop.shape[1] < 2:
         return None
@@ -257,7 +260,260 @@ def assign(rows, colors, L=56.0, outlier=2.5, min_limit=15.0, ref_fix=True, ref_
                 t = defender.get((h, "left" if x < L / 2 else "right"), -1)
             gk_teams[i] = t
         team.update(gk_teams)
-    return team, relabeled, gk, centers, ref_center
+    return team, relabeled, gk, centers, ref_center, limits
+
+
+def find_kickoffs(rows, ball_path, L=56.0, W=32.4, radius=1.5, still_m=0.8, still_s=0.8, min_players=8, max_gap_s=1.0,
+                  circle_r=4.75, line_m=0.5, calm_m=0.8, min_s=1.0):
+    """Kick-offs (start of a half and after every goal). Two ways to recognise one:
+      - by the ball: it lies still on the centre spot and the players stand in two groups, one on each half,
+      - by the players alone (the ball is often not seen on the centre spot): at most two players in the centre
+        circle (the ones taking the kick-off), everybody else clearly on one half, both halves about equally full,
+        and the players hardly move for at least min_s seconds.
+    Returns [(half, time, [frames], how)]."""
+    ball = {}
+    if ball_path is not None:
+        with open(ball_path) as f:
+            for r in csv.DictReader(f):
+                if r["x_m"]:
+                    ball[int(r["frame"])] = (float(r["time_s"]), int(r["half"]), float(r["x_m"]), float(r["y_m"]))
+    people, info = defaultdict(list), {}
+    for i, r in enumerate(rows):
+        if r["class"] == "player":
+            x, y = float(r["x_m"]), float(r["y_m"])
+            f = int(r["frame"])
+            info[f] = (float(r["time_s"]), int(r["half"]))
+            if 0 <= x <= L and 0 <= y <= W:
+                people[f].append((x, y))
+    frames = sorted(info)
+    ftimes = np.array([info[f][0] for f in frames])
+
+    def split_ok(pts):
+        if len(pts) < min_players:
+            return False
+        p = np.array(pts)
+        in_circle = np.hypot(p[:, 0] - L / 2, p[:, 1] - W / 2) < circle_r
+        rest = p[~in_circle]
+        if in_circle.sum() > 2 or np.any(np.abs(rest[:, 0] - L / 2) < line_m):
+            return False
+        left, right = int(np.sum(rest[:, 0] < L / 2)), int(np.sum(rest[:, 0] > L / 2))
+        return min(left, right) >= 3 and abs(left - right) <= 3
+
+    # by the ball
+    good = {}
+    btimes = np.array([ball[f][0] for f in sorted(ball)]) if ball else np.array([])
+    bxy = np.array([ball[f][2:] for f in sorted(ball)]) if ball else np.zeros((0, 2))
+    for k, f in enumerate(sorted(ball)):
+        t, h, bx, by = ball[f]
+        if np.hypot(bx - L / 2, by - W / 2) > radius:
+            continue
+        j = int(np.searchsorted(btimes, t - still_s))
+        if np.max(np.hypot(*(bxy[j:k + 1] - bxy[k]).T)) > still_m:
+            continue
+        pts = people.get(f, [])
+        xs = np.array([p[0] for p in pts])
+        left, right = int(np.sum(xs < L / 2 - 0.5)), int(np.sum(xs > L / 2 + 0.5))
+        if left + right >= min_players and min(left, right) >= 3 and abs(left - right) <= 3:
+            good[f] = "ball"
+    # by the players alone: the formation, and nobody moves (positions 1 s apart match within calm_m)
+    for k, f in enumerate(frames):
+        if f in good or not split_ok(people.get(f, [])):
+            continue
+        t = info[f][0]
+        j = int(np.searchsorted(ftimes, t - 1.0))
+        g = frames[j]
+        if g == f or info[g][1] != info[f][1] or not split_ok(people.get(g, [])):
+            continue
+        a, b = np.array(people[f]), np.array(people[g])
+        d = np.min(np.hypot(a[:, None, 0] - b[None, :, 0], a[:, None, 1] - b[None, :, 1]), axis=1)
+        if np.median(d) <= calm_m:
+            good[f] = "formation"
+    events, cur = [], []
+    for f in sorted(good):
+        t, h = info[f]
+        if cur and (t - cur[-1][1] > max_gap_s or h != cur[-1][2]):
+            events.append(cur)
+            cur = []
+        cur.append((f, t, h, good[f]))
+    if cur:
+        events.append(cur)
+    out = []
+    for ev in events:
+        if ev[-1][1] - ev[0][1] < (0.5 if any(e[3] == "ball" for e in ev) else min_s):
+            continue
+        how = "ball" if any(e[3] == "ball" for e in ev) else "formation"
+        out.append((ev[0][2], float(np.mean([e[1] for e in ev])), [e[0] for e in ev], how))
+    return out
+
+
+def kickoff_teams(rows, colors, events, player_idx, gk, L=56.0, tau_s=600.0, gk_zone=8.0, centre_m=1.5,
+                  min_side=8, per_event=12, outlier=2.5, min_limit=15.0):
+    """Teams learnt from the kick-offs: at a kick-off every team stands on its own half, so the players on each side
+    are labelled examples of the two kits. Sides are fixed within a half and swap at half time. Every player detection
+    gets the team whose kit it is closest to, compared with the examples from the kick-offs NEAREST IN TIME (weight
+    exp(-|dt| / tau_s)), so a kit that looks different as the light changes (sunset) is still recognised.
+    Returns (team, centers, limits, info) or None if the kick-offs are not enough."""
+    by_frame = defaultdict(list)
+    for i in player_idx:
+        by_frame[int(rows[i]["frame"])].append(i)
+    per_ev = []                                                        # per kick-off: (half, time, how, [(side, colour)])
+    for ev in events:
+        h, t, frs = ev[0], ev[1], ev[2]
+        how = ev[3] if len(ev) > 3 else "ball"
+        pick = [frs[int(k)] for k in np.linspace(0, len(frs) - 1, min(per_event, len(frs)))]
+        smp = []
+        for f in pick:
+            for i in by_frame.get(f, ()):
+                x = float(rows[i]["x_m"])
+                if i in gk or abs(x - L / 2) < centre_m or x < gk_zone or x > L - gk_zone:
+                    continue
+                smp.append((0 if x < L / 2 else 1, colors[i]))
+        if sum(1 for sd, _ in smp if sd == 0) >= 3 and sum(1 for sd, _ in smp if sd == 1) >= 3:
+            per_ev.append((h, t, how, smp))
+    # a kick-off is kept only if its two sides differ clearly in colour (a real kick-off: two kits apart) and the side
+    # of each kit agrees with the other kick-offs of that half (checked against the kick-offs found by the ball first)
+    def side_medians(smp):
+        return [np.median(np.float32([c for sd, c in smp if sd == k]), axis=0) for k in (0, 1)]
+    def spread(smp, med):
+        return float(np.median([cdist(med[sd], c) for sd, c in smp]))
+    kept, dropped = [], 0
+    for h in sorted({e[0] for e in per_ev}):
+        evs = sorted([e for e in per_ev if e[0] == h], key=lambda e: (e[2] != "ball", e[1]))
+        ref = None
+        for e in evs:
+            med = side_medians(e[3])
+            sep = float(cdist(med[0], med[1]))
+            if sep < 1.5 * spread(e[3], med):
+                dropped += 1
+                continue                                               # the two sides do not look like two kits
+            if ref is not None:
+                keep = float(cdist(ref[0], med[0]) + cdist(ref[1], med[1]))
+                swap = float(cdist(ref[0], med[1]) + cdist(ref[1], med[0]))
+                if swap < keep:
+                    dropped += 1
+                    continue                                           # the kits stand on the wrong sides: not a kick-off
+            else:
+                ref = med
+            kept.append(e)
+    samples = [(h, t, sd, c) for h, t, how, smp in kept for sd, c in smp]  # (half, time, side, colour)
+    halves = sorted({s[0] for s in samples})
+    cent = {}
+    for h in halves:
+        for side in (0, 1):
+            c = [s[3] for s in samples if s[0] == h and s[2] == side]
+            if len(c) < min_side:
+                return None
+            cent[(h, side)] = np.median(np.float32(c), axis=0)
+    # side of team A in every half: A = left side of the first half; in the other halves by colour (normally swapped)
+    h0 = halves[0]
+    side_of_a = {h0: 0}
+    for h in halves[1:]:
+        keep = float(cdist(cent[(h0, 0)], cent[(h, 0)]) + cdist(cent[(h0, 1)], cent[(h, 1)]))
+        swap = float(cdist(cent[(h0, 0)], cent[(h, 1)]) + cdist(cent[(h0, 1)], cent[(h, 0)]))
+        side_of_a[h] = 0 if keep < swap else 1
+    lab = np.array([0 if s[2] == side_of_a[s[0]] else 1 for s in samples])  # 0 = team A, 1 = team B
+    col = np.float32([s[3] for s in samples])
+    ts = np.array([s[1] for s in samples])
+    flipped = bool(np.median(col[lab == 0][:, 0]) > np.median(col[lab == 1][:, 0]))
+    if flipped:
+        lab = 1 - lab                                                  # team 0 = the darker kit, as before
+    # which team defends the left goal in every half (the team standing on the left half at the kick-offs)
+    left_team = {h: (0 if side_of_a[h] == 0 else 1) ^ int(flipped) for h in halves}
+    centers = np.float32([np.median(col[lab == t], axis=0) for t in (0, 1)])
+    limits = [max(outlier * float(np.median(cdist(col[lab == t], centers[t]))), min_limit) for t in (0, 1)]
+    # time-local kit colours: weighted medians approximated by weighted means in 30 s steps
+    team = {}
+    times = np.array([float(rows[i]["time_s"]) for i in player_idx])
+    order = np.argsort(times)
+    step = 30.0
+    for b0 in np.arange(times.min(), times.max() + step, step):
+        sel = order[(times[order] >= b0) & (times[order] < b0 + step)]
+        if not len(sel):
+            continue
+        w = np.exp(-np.abs(ts - (b0 + step / 2)) / tau_s)
+        loc = [(col[lab == t] * w[lab == t, None]).sum(0) / w[lab == t].sum() for t in (0, 1)]
+        for j in sel:
+            i = player_idx[j]
+            if i in gk:
+                continue
+            d = [float(cdist(loc[t], colors[i])) for t in (0, 1)]
+            t = int(np.argmin(d))
+            team[i] = t if d[t] <= 1.3 * limits[t] else -1
+    info = {"events": len(kept), "by_ball": sum(1 for e in kept if e[2] == "ball"), "dropped": dropped, "samples": len(samples), "per_half": {h: sum(1 for s in samples if s[0] == h) for h in halves},
+            "swapped_at_half_time": {h: side_of_a[h] != side_of_a[h0] for h in halves[1:]}, "left_team": left_team}
+    return team, centers, limits, info
+
+
+def consistent_teams(rows, team, colors, centers, limits, gk, L=56.0, W=32.4, field=5, link_m=1.2, window_s=1.0):
+    """Two corrections of the colour-based teams, both using that the same player keeps his team:
+    1) smoothing over time: detections are linked to the nearest detection in the previous frame (within link_m);
+       along a chain every detection gets the team that most detections of the chain around it (+-window_s) have.
+       A player whose shirt looks different for a moment (sun, shadow, blur, turning) keeps his team.
+    2) team size: a team has at most `field` outfield players on the pitch. If in a frame one team has too many and
+       the other too few, the players of the crowded team whose colour is closest to the other team (and not far
+       from it) move to it.
+    Returns the corrected teams and the numbers of detections changed by 1) and by 2)."""
+    team = dict(team)
+    idx = [i for i, t in team.items() if t in (0, 1) and i not in gk and rows[i]["class"] == "player"]
+    by_frame = defaultdict(list)
+    for i in idx:
+        by_frame[int(rows[i]["frame"])].append(i)
+    frames = sorted(by_frame)
+    pos = {i: (float(rows[i]["x_m"]), float(rows[i]["y_m"])) for i in idx}
+    tim = {i: float(rows[i]["time_s"]) for i in idx}
+    # 1) chains
+    chain, prev, next_id = {}, [], 0
+    for f in frames:
+        cur = by_frame[f]
+        used = set()
+        pairs = sorted((np.hypot(pos[i][0] - pos[j][0], pos[i][1] - pos[j][1]), i, j) for i in cur for j in prev)
+        for d, i, j in pairs:
+            if d > link_m or i in chain or j in used:
+                continue
+            chain[i] = chain[j]
+            used.add(j)
+        for i in cur:
+            if i not in chain:
+                chain[i], next_id = next_id, next_id + 1
+        prev = cur
+    members = defaultdict(list)
+    for i in idx:
+        members[chain[i]].append(i)
+    smoothed = 0
+    for c, ms in members.items():
+        if len(ms) < 3:
+            continue
+        ms.sort(key=lambda i: tim[i])
+        tt = np.array([tim[i] for i in ms])
+        lab = np.array([team[i] for i in ms])
+        lo = np.searchsorted(tt, tt - window_s)
+        hi = np.searchsorted(tt, tt + window_s, side="right")
+        cs = np.concatenate([[0], np.cumsum(lab == 1)])
+        for k, i in enumerate(ms):
+            n = hi[k] - lo[k]
+            ones = cs[hi[k]] - cs[lo[k]]
+            new = 1 if ones * 2 > n else 0 if ones * 2 < n else team[i]
+            if new != team[i]:
+                team[i] = new
+                smoothed += 1
+    # 2) team size per frame
+    balanced = 0
+    for f in frames:
+        on = [i for i in by_frame[f] if -0.5 <= pos[i][0] <= L + 0.5 and -0.5 <= pos[i][1] <= W + 0.5]
+        n = {t: sum(1 for i in on if team[i] == t) for t in (0, 1)}
+        for big, small in ((1, 0), (0, 1)):
+            k = min(n[big] - field, field - n[small])
+            if k <= 0:
+                continue
+            cand = [i for i in on if team[i] == big                    # not hopelessly far from the other team's colour
+                    and float(cdist(centers[small], colors[i])) <= max(limits[small], 3.0 * float(cdist(centers[big], colors[i])))]
+            cand.sort(key=lambda i: float(cdist(centers[small], colors[i])) - float(cdist(centers[big], colors[i])))
+            for i in cand[:k]:
+                team[i] = small
+                balanced += 1
+            n[big] -= len(cand[:k])
+            n[small] += len(cand[:k])
+    return team, smoothed, balanced
 
 
 def main():
@@ -273,6 +529,14 @@ def main():
     ap.add_argument("--gk-kickoff-s", type=float, default=15.0, help="seconds after the start of a half used to find the goalkeepers")
     ap.add_argument("--gk-radius", type=float, default=22.0, help="colour distance to a goalkeeper kit")
     ap.add_argument("--pitch-length", type=float, default=56.0)
+    ap.add_argument("--pitch-width", type=float, default=32.4)
+    ap.add_argument("--field-players", type=int, default=5, help="outfield players per team on the pitch")
+    ap.add_argument("--no-consistency", action="store_true", help="no smoothing over time and no team-size correction")
+    ap.add_argument("--ball", help="ball.csv from dual_ball.py: needed to find the kick-offs (--method kickoff)")
+    ap.add_argument("--method", choices=["auto", "kickoff", "colour"], default="auto",
+                    help="kickoff = teams learnt from the kick-offs (each team on its own half, light changes over the match "
+                         "followed); colour = two clusters of the shirt colour over the whole match; auto = kickoff when enough "
+                         "kick-offs are found, else colour")
     ap.add_argument("--reuse-colors", action="store_true", help="reuse the colours saved by an earlier run (no video)")
     a = ap.parse_args()
 
@@ -294,9 +558,40 @@ def main():
         colors = read_colors(Path(a.video).expanduser(), rows, by_frame, a.grass_dist)
         np.savez(cache, idx=np.array(list(colors.keys())), lab=np.float32(list(colors.values())))
 
-    team, relabeled, gk, centers, ref_center = assign(
+    team, relabeled, gk, centers, ref_center, limits = assign(
         rows, colors, a.pitch_length, a.outlier, a.min_limit, not a.no_ref_fix, use_gk=not a.no_gk,
         gk_kickoff_s=a.gk_kickoff_s, gk_radius=a.gk_radius)
+    method = "colour"
+    if a.method in ("auto", "kickoff") and a.ball:
+        events = find_kickoffs(rows, Path(a.ball).expanduser(), a.pitch_length, a.pitch_width)
+        player_idx = [i for i in colors if rows[i]["class"] == "player" and i not in relabeled]
+        res = kickoff_teams(rows, colors, events, player_idx, gk, a.pitch_length) if events else None
+        if res is not None:
+            k_team, centers, limits, info = res
+            team.update(k_team)
+            method = "kickoff"
+            # goalkeepers by the side of the pitch: the one in the left half belongs to the team defending the left goal
+            n_gk = 0
+            for i in gk:
+                h = int(rows[i]["half"])
+                if h in info["left_team"]:
+                    lt = info["left_team"][h]
+                    new_t = lt if float(rows[i]["x_m"]) < a.pitch_length / 2 else 1 - lt
+                    n_gk += team.get(i) != new_t
+                    team[i] = new_t
+            print(f"goalkeepers by the side they defend (from the kick-offs): {n_gk} goalkeeper detections changed team")
+            print(f"teams from the kick-offs: {info['events']} kick-offs used ({info['by_ball']} with the ball on the centre spot, "
+                  f"{info['events'] - info['by_ball']} from the players' positions alone; {info['dropped']} rejected), {info['samples']} examples "
+                  f"(per half {info['per_half']}), sides swapped at half time: {info['swapped_at_half_time']}")
+        elif a.method == "kickoff":
+            raise SystemExit(f"--method kickoff: not enough kick-offs found ({len(events)}) - use --method colour")
+        else:
+            print(f"only {len(events)} kick-offs found - teams from the shirt colour (clusters)")
+    elif a.method == "kickoff":
+        raise SystemExit("--method kickoff needs --ball")
+    if not a.no_consistency:
+        team, n_smooth, n_bal = consistent_teams(rows, team, colors, centers, limits, gk, a.pitch_length, a.pitch_width, a.field_players)
+        print(f"team corrections: {n_smooth} detections by smoothing over time, {n_bal} by the team size ({a.field_players} outfield players)")
     for i in relabeled:
         rows[i] = dict(rows[i], **{"class": "referee"})
 

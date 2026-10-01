@@ -38,7 +38,9 @@ def main():
     ap.add_argument("--name", required=True, help="match name (for the calibration files)")
     ap.add_argument("--model", required=True)
     ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"))
-    ap.add_argument("--pitch", required=True)
+    ap.add_argument("--pitch", help="pitch definition (needed for the filter)")
+    ap.add_argument("--no-filter", action="store_true",
+                    help="keep all detections, no calibration needed (people outside the pitch must then be removed in CVAT)")
     ap.add_argument("--imgsz", type=int, default=2048)
     ap.add_argument("--conf", type=float, default=0.15)
     ap.add_argument("--margin", type=float, default=1.0, help="metres outside the pitch still kept (people)")
@@ -50,8 +52,14 @@ def main():
     if not imgs:
         raise SystemExit(f"No frames in {frames}")
     cdir = Path(a.calib_dir).expanduser()
-    calibs = {h: json.loads((cdir / f"{a.name}_{h}.json").read_text()) for h in ("top", "bottom")}
-    pitch = json.loads(Path(a.pitch).read_text())
+    use_filter = not a.no_filter
+    if use_filter:
+        missing = [h for h in ("top", "bottom") if not (cdir / f"{a.name}_{h}.json").exists()]
+        if missing or not a.pitch:
+            raise SystemExit(f"no calibration {a.name}_{'/'.join(missing) or 'top/bottom'}.json in {cdir} or no --pitch: "
+                             "calibrate the match first, or add --no-filter")
+        calibs = {h: json.loads((cdir / f"{a.name}_{h}.json").read_text()) for h in ("top", "bottom")}
+        pitch = json.loads(Path(a.pitch).read_text())
     model = YOLO(str(Path(a.model).expanduser()))
     names = model.names
 
@@ -74,9 +82,12 @@ def main():
                 pts = np.where(np.array(cls)[:, None] == "ball",
                                np.stack([(xyxy[:, 0] + xyxy[:, 2]) / 2, (xyxy[:, 1] + xyxy[:, 3]) / 2], 1),
                                np.stack([(xyxy[:, 0] + xyxy[:, 2]) / 2, xyxy[:, 3]], 1))
-                xy = pixels_to_pitch(calibs[half], pts)
-                ok_people = inside(xy, pitch, a.margin)
-                ok_ball = inside(xy, pitch, a.ball_margin)
+                if use_filter:
+                    xy = pixels_to_pitch(calibs[half], pts)
+                    ok_people = inside(xy, pitch, a.margin)
+                    ok_ball = inside(xy, pitch, a.ball_margin)
+                else:
+                    ok_people = ok_ball = np.ones(len(cls), bool)
                 for c, (x, y, w, h), okp, okb in zip(cls, xywhn, ok_people, ok_ball):
                     if c not in NAMES or not (okb if c == "ball" else okp):
                         dropped += 1

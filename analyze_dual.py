@@ -90,7 +90,7 @@ def main():
         run([py, HERE / "dual_ball.py", files["detect"], "--out", files["ball"], "--plot", out / "ball.png"])
         first = min(first, 2)
     if needed("teams"):
-        cmd = [py, HERE / "dual_teams.py", files["detect"], "--video", video, "--out", files["teams"]]
+        cmd = [py, HERE / "dual_teams.py", files["detect"], "--video", video, "--out", files["teams"], "--ball", files["ball"]]
         if a.reuse_colors:
             cmd.append("--reuse-colors")
         run(cmd)

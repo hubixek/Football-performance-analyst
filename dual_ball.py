@@ -27,18 +27,44 @@ from pathlib import Path
 import numpy as np
 
 
-def load(path):
+def load(path, on_body=0.6, inner=0.7):
+    """Frames, ball candidates and people. A ball candidate whose centre lies on the upper body of a detected person
+    (inside the middle `inner` of the box width and the upper `on_body` of its height: head, cap, shirt) is dropped:
+    the model takes white caps, heads, socks and shirts for the ball there, while the real ball at a player's feet lies
+    in the lower part of the box or below it. on_body = 0 switches this off."""
     frames = {}
     balls, people = defaultdict(list), defaultdict(list)
+    cand, boxes = defaultdict(list), defaultdict(list)
     with open(path) as f:
         for r in csv.DictReader(f):
             fr = int(r["frame"])
             frames[fr] = (float(r["time_s"]), int(r["half"]))
             xy = (float(r["x_m"]), float(r["y_m"]))
+            box = tuple(float(r[k]) for k in ("x1", "y1", "x2", "y2")) if r.get("x1") not in (None, "") else None
             if r["class"] == "ball":
-                balls[fr].append((*xy, float(r["conf"])))
+                cand[fr].append((xy, float(r["conf"]), r.get("cam", ""), box))
             else:
                 people[fr].append(xy)
+                if box is not None:
+                    boxes[(fr, r.get("cam", ""))].append(box)
+    dropped = 0
+    for fr, lst in cand.items():
+        for xy, conf, cam, box in lst:
+            if on_body > 0 and box is not None:
+                cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+                hit = False
+                for x1, y1, x2, y2 in boxes.get((fr, cam), ()):
+                    m = (1 - inner) / 2 * (x2 - x1)
+                    if x1 + m <= cx <= x2 - m and y1 <= cy <= y1 + on_body * (y2 - y1):
+                        hit = True
+                        break
+                if hit:
+                    dropped += 1
+                    continue
+            balls[fr].append((*xy, conf))
+    n = sum(len(v) for v in cand.values())
+    if on_body > 0:
+        print(f"ball candidates: {n}, {dropped} ({100 * dropped / max(n, 1):.1f}%) dropped - on the upper body of a person (head, cap, shirt)")
     return frames, balls, people
 
 
@@ -145,9 +171,11 @@ def main():
     ap.add_argument("--lost-s", type=float, default=1.5, help="seconds without the ball before re-acquiring")
     ap.add_argument("--interp-s", type=float, default=1.0, help="longest gap filled by interpolation, s")
     ap.add_argument("--cell", type=float, default=0.5, help="grid size for spare-ball spots, m")
+    ap.add_argument("--on-body", type=float, default=0.6,
+                    help="drop ball candidates on the upper part of a person's box (this share of its height; 0 = off)")
     a = ap.parse_args()
 
-    frames, balls, people = load(Path(a.detections).expanduser())
+    frames, balls, people = load(Path(a.detections).expanduser(), a.on_body)
     spots = static_spots(frames, balls, people, a.cell)
     trk = track(frames, balls, people, a, spots)
     ball = interpolate(frames, trk, a.interp_s)

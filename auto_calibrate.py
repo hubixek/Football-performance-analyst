@@ -83,10 +83,12 @@ def turf_region(img):
 
 def line_mask(img):
     """White pitch lines: thin bright, low-saturation structures inside the turf region."""
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    v = hsv[..., 2]
-    tophat = cv2.morphologyEx(v, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21)))
-    white = (tophat > 18) & (hsv[..., 1] < 80) & (v > 110)
+    # "white" = bright in ALL colour channels: the darkest channel of a line is far above the turf's, whatever colour
+    # cast the light or the camera gives (in the evening the lines look blue and are strongly saturated in HSV terms)
+    grey = img.min(axis=2)
+    turf_grey = float(np.median(grey[int(img.shape[0] * 0.65):]))
+    tophat = cv2.morphologyEx(grey, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31)))
+    white = (tophat > 18) & (grey > turf_grey + 30)
     # inside the pitch (convex hull) AND next to turf-coloured pixels: cuts the connection of
     # far lines to walls, cars and fences behind them
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
@@ -104,7 +106,7 @@ def line_mask(img):
     max_hw = np.zeros(n)
     np.maximum.at(max_hw, labels.ravel(), half_width.ravel())
     length = np.hypot(stats[:, cv2.CC_STAT_WIDTH], stats[:, cv2.CC_STAT_HEIGHT])
-    keep = (length >= 40) & (max_hw <= 14)
+    keep = (length >= 40) & (max_hw <= 16)
     keep[0] = False
     return keep[labels].astype(np.uint8) * 255
 
