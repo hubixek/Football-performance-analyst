@@ -53,20 +53,24 @@ def median_background(video, half, n_frames, start_s, end_s):
     return np.median(np.stack(frames), axis=0).astype(np.uint8)
 
 
-def turf_region(img):
+def turf_region(img, relaxed=False):
     """Mask of the pitch surface.
 
     Colour of the turf is taken from the lower part of the image (mostly pitch); similar
     pixels are selected by hue/chroma (ignoring brightness, so light and dark mowing stripes
     both count), thin connections to hedges and trees are cut, lines are closed over and only
     the largest connected area is kept.
+    relaxed: wider tolerances for floodlights at night, where the far turf under the lights is much brighter and more
+    yellow than the turf next to the camera (measured: +60 lightness, colour distance 18). Use it only when the
+    search area is limited otherwise (calibrate_match.py: where the players stood).
     """
     h, w = img.shape[:2]
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
     ref = np.median(lab[int(h * 0.65):].reshape(-1, 3), axis=0)
     chroma = np.linalg.norm(lab[..., 1:] - ref[1:], axis=2)
     light = lab[..., 0]
-    turf = ((chroma < 14) & (light > ref[0] - 50) & (light < ref[0] + 45)).astype(np.uint8)
+    c_max, l_lo, l_hi = (24, 55, 100) if relaxed else (14, 50, 45)
+    turf = ((chroma < c_max) & (light > ref[0] - l_lo) & (light < ref[0] + l_hi)).astype(np.uint8)
     turf = cv2.morphologyEx(turf, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)))
     turf = cv2.morphologyEx(turf, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31)))
     n, labels, stats, _ = cv2.connectedComponentsWithStats(turf, 8)
@@ -81,34 +85,95 @@ def turf_region(img):
     return filled * 255
 
 
-def line_mask(img):
-    """White pitch lines: thin bright, low-saturation structures inside the turf region."""
-    # "white" = bright in ALL colour channels: the darkest channel of a line is far above the turf's, whatever colour
-    # cast the light or the camera gives (in the evening the lines look blue and are strongly saturated in HSV terms)
+def _line_kernels(length=15, n=12):
+    ks = []
+    for k in range(n):
+        a = np.pi * k / n
+        c = np.zeros((length, length), np.uint8)
+        m = (length - 1) / 2
+        dx, dy = np.cos(a) * m, np.sin(a) * m
+        cv2.line(c, (int(round(m - dx)), int(round(m - dy))), (int(round(m + dx)), int(round(m + dy))), 1, 1)
+        ks.append(c)
+    return ks
+
+
+_KERNELS = _line_kernels()
+
+
+def line_mask(img, relaxed=False, contrast=14, bg_k=61):
+    """White pitch lines: thin bright structures inside the turf region.
+
+    A pixel is white when its darkest colour channel (white = bright in ALL channels, whatever the colour cast of the light)
+    is clearly above its own neighbourhood (median of bg_k x bg_k px), not above one brightness for the whole image: under
+    floodlights the far lines are darker than the turf next to the camera, and patches of turf under a lamp are brighter
+    than lines elsewhere. Only pixels lying on a straight run of at least 15 px in some direction are kept (the grain of
+    turf lit by a lamp gives short irregular specks), then only long pieces no thicker than a line near the camera.
+    relaxed: see turf_region (for floodlit matches; the caller must limit the search area).
+    """
     grey = img.min(axis=2)
-    turf_grey = float(np.median(grey[int(img.shape[0] * 0.65):]))
-    tophat = cv2.morphologyEx(grey, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31)))
-    white = (tophat > 18) & (grey > turf_grey + 30)
+    bg = cv2.medianBlur(grey, bg_k)
+    white = ((grey.astype(np.int16) - bg.astype(np.int16)) > contrast).astype(np.uint8)
     # inside the pitch (convex hull) AND next to turf-coloured pixels: cuts the connection of
     # far lines to walls, cars and fences behind them
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
     h = img.shape[0]
     ref = np.median(lab[int(h * 0.65):].reshape(-1, 3), axis=0)
-    near_turf = (np.linalg.norm(lab[..., 1:] - ref[1:], axis=2) < 18).astype(np.uint8)
+    near_turf = (np.linalg.norm(lab[..., 1:] - ref[1:], axis=2) < (26 if relaxed else 18)).astype(np.uint8)
     near_turf = cv2.dilate(near_turf, np.ones((11, 11), np.uint8)) > 0
-    region = cv2.dilate(turf_region(img), np.ones((9, 9), np.uint8)) > 0
-    mask = (white & region & near_turf).astype(np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+    region = cv2.dilate(turf_region(img, relaxed), np.ones((9, 9), np.uint8)) > 0
+    white = (white & region & near_turf).astype(np.uint8)
+    lin = np.zeros_like(white)
+    for k in _KERNELS:
+        lin = np.maximum(lin, cv2.morphologyEx(white, cv2.MORPH_OPEN, k))
     # keep only line-like pieces: long, and nowhere thicker than a line close to the camera
-    # (drops balls, sky gaps in foliage and other blobs)
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
-    half_width = cv2.distanceTransform(mask, cv2.DIST_L2, 3)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(lin, 8)
+    half_width = cv2.distanceTransform(lin, cv2.DIST_L2, 3)
     max_hw = np.zeros(n)
     np.maximum.at(max_hw, labels.ravel(), half_width.ravel())
     length = np.hypot(stats[:, cv2.CC_STAT_WIDTH], stats[:, cv2.CC_STAT_HEIGHT])
     keep = (length >= 40) & (max_hw <= 16)
     keep[0] = False
     return keep[labels].astype(np.uint8) * 255
+
+
+def drop_blobs(mask, elong_min=12.0, fill_max=0.4):
+    """Removes compact irregular patches from a line mask and keeps line-like pieces.
+
+    A pitch line is either long and thin (elongation = square root of the ratio of the two principal axes of its pixels >= elong_min)
+    or a hollow ring (the centre circle: little elongated, but it fills only a small part of its convex hull). Patches of floodlit turf,
+    grain and reflections are neither: little elongated AND filling much of their hull. Measured on a floodlit match: the lines
+    had an elongation of 13.9-27, the patches 1.6-11.7 with a hull fill of 0.48-0.85.
+    """
+    m = (mask > 0).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(m, 8)
+    if n <= 1:
+        return mask
+    ys, xs = np.nonzero(labels)
+    lab = labels[ys, xs]
+    cnt = np.bincount(lab, minlength=n).astype(np.float64)
+    sx, sy = np.bincount(lab, xs, n), np.bincount(lab, ys, n)
+    sxx, syy, sxy = np.bincount(lab, xs.astype(np.float64) ** 2, n), np.bincount(lab, ys.astype(np.float64) ** 2, n), np.bincount(lab, xs.astype(np.float64) * ys, n)
+    keep = np.ones(n, bool)
+    keep[0] = False
+    for i in range(1, n):
+        c = cnt[i]
+        if c < 5:
+            keep[i] = False
+            continue
+        vx, vy = sxx[i] / c - (sx[i] / c) ** 2, syy[i] / c - (sy[i] / c) ** 2
+        cxy = sxy[i] / c - (sx[i] / c) * (sy[i] / c)
+        tr, det = vx + vy, vx * vy - cxy ** 2
+        l1 = tr / 2 + np.sqrt(max(tr * tr / 4 - det, 0.0))
+        l2 = max(tr - l1, 1e-6)
+        if np.sqrt(l1 / l2) >= elong_min:
+            continue
+        x, y, w, h = stats[i, :4]
+        sub = (labels[y:y + h, x:x + w] == i).astype(np.uint8)
+        cnts, _ = cv2.findContours(sub, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        hull = cv2.contourArea(cv2.convexHull(np.vstack(cnts)))
+        if c / max(hull, 1.0) > fill_max:
+            keep[i] = False
+    return (keep[labels].astype(np.uint8) * 255)
 
 
 def pitch_area(calib, pitch, size, margin, step=8):

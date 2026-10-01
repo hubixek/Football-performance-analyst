@@ -26,7 +26,7 @@ from scipy.ndimage import map_coordinates
 from scipy.optimize import least_squares
 from scipy.spatial import cKDTree
 
-from auto_calibrate import line_mask, pitch_area
+from auto_calibrate import drop_blobs, line_mask, pitch_area
 from calibrate import _look_at, densify, fisheye_project, pitch_lines
 
 HALVES = ("top", "bottom")
@@ -292,21 +292,24 @@ def main():
         cfg = json.loads(Path(a.match).read_text())
         start_s, end_s = cfg["halves"][0]["start_s"], cfg["halves"][-1]["end_s"]
 
-    bgs, masks = {}, {}
+    bgs, masks, regions = {}, {}, {}
     for half in HALVES:
         model_path = Path(a.model).expanduser() if a.model else None
         use_model = model_path is not None and model_path.exists()
         frames, pairs, bgs[half] = read_half(Path(a.video).expanduser(), half, a.frames, start_s, end_s, with_pairs=not use_model)
-        masks[half] = line_mask(bgs[half])
-        n_all = int((masks[half] > 0).sum())
         if use_model:
             pts, source = yolo_feet(frames[::max(1, len(frames) // 50)], model_path), "detection model"
         else:
             pts, source = motion_feet(pairs), "movement (no model found)"
-        region = activity_region(pts, masks[half].shape)
+        region = activity_region(pts, bgs[half].shape[:2])
         if region is not None and (region > 0).mean() > 0.9:
             print(f"{half:6s}: WARNING the player positions cover almost the whole image - the area is not limited")
             region = None
+        regions[half] = region
+        # with the area limited by the players the wide (floodlight) turf colours are safe: under floodlights the far turf has
+        # another colour than the turf next to the camera, and with the narrow colours the far lines were lost (night match)
+        masks[half] = drop_blobs(line_mask(bgs[half], relaxed=region is not None))
+        n_all = int((masks[half] > 0).sum())
         if region is not None:
             masks[half] = cv2.bitwise_and(masks[half], region)       # no pitch lines above where the players stand
             print(f"{half:6s}: {n_all} white-line pixels, {int((masks[half] > 0).sum())} of them where the players played "
@@ -344,8 +347,14 @@ def main():
         on_pitch = cv2.bitwise_and(masks[half], pitch_area(calibs[half], pitch, (w_img, h_img), 2.0))
         ys, xs = np.nonzero(on_pitch)
         explained = float((model_dist[ys, xs] < 8).mean()) if len(xs) else 0.0
-        ok_all &= explained >= 0.6 and n_vis >= 500
-        calibs[half].update({"auto_from": a.ref, "explained_lines": explained, "image_size": [2048, 1024]})
+        # covered: share of the model lines (where the players played) that have a detected line within 8 px. "Explained" alone
+        # can be high for a wrong fit when only the near lines were detected (night match: 63% explained, 26% covered, wrong).
+        mask_dist = cv2.distanceTransform(255 - (masks[half] > 0).astype(np.uint8) * 255, cv2.DIST_L2, 5)
+        area = regions.get(half) if regions.get(half) is not None else pitch_area(calibs[half], pitch, (w_img, h_img), 0.0)
+        my, mx = np.nonzero((drawn > 0) & (area > 0))
+        covered = float((mask_dist[my, mx] < 8).mean()) if len(mx) else 0.0
+        ok_all &= explained >= 0.5 and covered >= 0.6 and n_vis >= 500
+        calibs[half].update({"auto_from": a.ref, "explained_lines": explained, "covered_lines": covered, "image_size": [2048, 1024]})
         out = cdir / f"{a.name}_{half}.json"
         out.write_text(json.dumps(calibs[half], indent=2))
         check = bgs[half].copy()
@@ -357,10 +366,17 @@ def main():
                 if len(seg) > 1:
                     cv2.polylines(check, [seg.round().astype(np.int32)], False, (0, 255, 255), 2)
         cv2.imwrite(str(out.with_suffix(".check.jpg")), check)
-        print(f"{half:6s}: {explained:.0%} of detected line pixels explained -> {out}")
+        print(f"{half:6s}: {explained:.0%} of detected line pixels explained, {covered:.0%} of the model lines covered -> {out}")
+    # the camera of the reference match: a camera mounted at the same spot gives nearly the same position
+    ref_cal = json.loads((cdir / f"{a.ref}_top.json").read_text())
+    def cam_pos(c):
+        R, _ = cv2.Rodrigues(np.array(c["rvec"], float))
+        return (-R.T @ np.array(c["tvec"], float)).ravel()
+    moved = float(np.linalg.norm(cam_pos(calibs["top"]) - cam_pos(ref_cal)))
+    print(f"camera {moved:.1f} m from the camera of {a.ref}" + (" (a different spot, or a wrong fit)" if moved > 3.0 else ""))
     if not ok_all:
-        print("WARNING: weak match - check the images; if the yellow lines do not lie on the pitch "
-              "lines, calibrate this match manually (calibrate.py) and use it as a new reference")
+        print("WARNING: weak match (needed: at least 50% explained and 60% covered) - check the images; if the yellow lines do not "
+              "lie on the pitch lines, calibrate this match manually (calibrate.py) and use it as a new reference")
 
 
 if __name__ == "__main__":

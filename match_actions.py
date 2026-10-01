@@ -28,6 +28,7 @@ Usage:
 import argparse
 import csv
 import json
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -113,10 +114,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("folder", help="analysis folder (possession.csv, stats.json)")
     ap.add_argument("--pitch", required=True)
-    ap.add_argument("--goals", help="times of the goals in the recording, e.g. 14:21,21:29 (else restarts.json is used, if it exists)")
+    ap.add_argument("--goals", help="times of the goals in the recording, e.g. 14:21,21:29 (else goals_auto.csv of detect_goals.py, else restarts.json)")
     ap.add_argument("--goal-width", type=float, default=5.0, help="width of the goal in metres (the xG and 'on target' depend on it)")
-    ap.add_argument("--shot-speed", type=float, default=10.0, help="slowest ball speed of a shot, m/s")
-    ap.add_argument("--shot-range", type=float, default=22.0, help="farthest a shot is taken from the goal line, m")
+    ap.add_argument("--shot-speed", type=float, default=6.0, help="slowest ball speed of a shot, m/s (goals of a real match: 5-30 m/s)")
+    ap.add_argument("--shot-range", type=float, default=32.0, help="farthest a shot is taken from the goal line, m (goals of a real match were scored from up to 34 m)")
     ap.add_argument("--pass-min-d", type=float, default=4.0, help="shortest pass, m")
     ap.add_argument("--pass-min-speed", type=float, default=5.0, help="slowest pass, m/s")
     ap.add_argument("--debug", action="store_true", help="print why the possible passes were not counted (for finding what limits the numbers)")
@@ -140,11 +141,25 @@ def main():
     def norm(team, h, x, y):
         return (x, y) if attacks_right(team, h) else (L - x, W - y)
 
-    goal_times = []
+    def half_at(g):
+        return int(half[min(int(np.searchsorted(t, g)), len(t) - 1)])
+
+    goal_info, goals_source = [], "none"
     if a.goals:
-        goal_times = sorted(parse_time(x) for x in a.goals.split(",") if x.strip())
+        goal_info = [{"t": g, "half": half_at(g), "scorer": None} for g in sorted(parse_time(x) for x in a.goals.split(",") if x.strip())]
+        goals_source = "--goals"
+    elif (folder / "goals_auto.csv").exists():
+        with open(folder / "goals_auto.csv") as f:
+            for r in csv.DictReader(f):
+                if r.get("category") == "goal" and r.get("goal_s"):
+                    goal_info.append({"t": float(r["goal_s"]), "half": int(r["half"]), "scorer": int(r["scorer"]) if r.get("scorer", "") != "" else None})
+        goal_info.sort(key=lambda x: x["t"])
+        goals_source = "goals_auto.csv (detect_goals.py)"
     elif (folder / "restarts.json").exists():
-        goal_times = sorted(w["start"] + 2.0 for w in json.loads((folder / "restarts.json").read_text()) if w.get("type") == "goal")
+        goal_info = [{"t": w["start"] + 2.0, "half": half_at(w["start"] + 2.0), "scorer": None}
+                     for w in sorted(json.loads((folder / "restarts.json").read_text()), key=lambda w: w["start"]) if w.get("type") == "goal"]
+        goals_source = "restarts.json"
+    goal_times = [g["t"] for g in goal_info]
 
     known = ~np.isnan(bx)
     speed_now = ball_speed(t, bx, by)
@@ -209,22 +224,48 @@ def main():
         if nxt is not None and nxt["team"] != team and after <= 3.0:
             xr, yr = norm(team, h, bx[nxt["i0"]], by[nxt["i0"]])
             outcome = "saved" if (L - xr <= 3.5 and aim_on_target) else "blocked"
-        goal = aim_on_target and any(-1.0 <= g - tr <= 7.0 for g in goal_times)
+        goal = aim_on_target and any(-2.0 <= g - tr <= 9.0 for g in goal_times)
         if goal:
             outcome = "goal"
         shots.append({"si": si, "team": team, "half": h, "t": tr, "x": float(p0[0]), "y": float(p0[1]), "xn": float(x0n), "yn": float(y0n),
                       "speed": float(speed), "outcome": outcome, "inferred": False, "xg": xg_model(x0n, y0n, L, W, gw)})
-    for g in goal_times:                                               # a goal is always a shot: add the goals no shot was found for
-        if any(sh["outcome"] == "goal" and -1.0 <= g - sh["t"] <= 7.0 for sh in shots):
+    no_origin = []
+    for gi in goal_info:                                               # a goal is always a shot: add the goals no shot was found for
+        g, sc, h = gi["t"], gi["scorer"], gi["half"]
+        cands = [sh for sh in shots if not sh.get("inferred") and -2.0 <= g - sh["t"] <= 9.0 and (sc is None or sh["team"] == sc)]
+        if cands:                                                      # the ball track found this shot already: it is the goal
+            best = max(cands, key=lambda sh: sh["t"])
+            best["outcome"] = "goal"
             continue
-        prev = [sg for sg in segs if 0 < g - t[sg["i1"]] <= 10.0]
-        for sg in reversed(prev):
-            xg0, yg0 = norm(sg["team"], sg["half"], bx[sg["i1"]], by[sg["i1"]])
-            if xg0 >= L / 2 and not np.isnan(xg0):
-                shots.append({"si": -1, "team": sg["team"], "half": sg["half"], "t": float(t[sg["i1"]]), "x": float(bx[sg["i1"]]), "y": float(by[sg["i1"]]),
-                              "xn": float(xg0), "yn": float(yg0), "speed": float("nan"), "outcome": "goal", "inferred": True,
-                              "xg": xg_model(xg0, yg0, L, W, gw)})
-                break
+        origin = None
+        if sc is not None:
+            # (a) the last control by the scoring team in the 15 s before the goal, in its attacking half
+            for i in np.flatnonzero((half == h) & (t >= g - 15) & (t <= g - 0.3) & (ctrl == sc) & known)[::-1]:
+                xn_, _ = norm(sc, h, bx[i], by[i])
+                if xn_ >= L / 2:
+                    origin = (int(i), sc, "control")
+                    break
+            # (b) else the last ball position 1.5-8 s before the goal that is in the attacking half and not at the goal
+            if origin is None:
+                for i in np.flatnonzero((half == h) & (t >= g - 8) & (t <= g - 1.5) & known)[::-1]:
+                    xn_, _ = norm(sc, h, bx[i], by[i])
+                    if xn_ >= L / 2 and L - xn_ >= 3.0:
+                        origin = (int(i), sc, "ball")
+                        break
+        else:                                                          # no scorer known: the last control of any team in its attacking half
+            for sg in reversed([sg for sg in segs if 0 < g - t[sg["i1"]] <= 10.0]):
+                xn_, _ = norm(sg["team"], sg["half"], bx[sg["i1"]], by[sg["i1"]])
+                if xn_ >= L / 2 and not np.isnan(xn_):
+                    origin = (sg["i1"], sg["team"], "control")
+                    break
+        if origin is None:
+            no_origin.append(g)
+            continue
+        i, team, src = origin
+        xg0, yg0 = norm(team, h, bx[i], by[i])
+        shots.append({"si": -1, "team": int(team), "half": h, "t": float(t[i]), "x": float(bx[i]), "y": float(by[i]),
+                      "xn": float(xg0), "yn": float(yg0), "speed": float("nan"), "outcome": "goal", "inferred": True, "origin": src,
+                      "xg": xg_model(xg0, yg0, L, W, gw)})
     dedup = []
     for sh in sorted(shots, key=lambda x: x["t"]):
         if not any(o["team"] == sh["team"] and sh["t"] - o["t"] < 1.5 for o in dedup):
@@ -331,7 +372,7 @@ def main():
     quality = {"ball_visible_percent": round(100 * float(known.mean()), 1), "goal_width_m": gw, "goals_given": len(goal_times)}
     matched = None
     if goal_times:
-        matched = [any(-1.0 <= g - s["t"] <= 7.0 and s["outcome"] in ("goal", "on_target", "saved") and not s.get("inferred") for s in shots) for g in goal_times]
+        matched = [any(-2.0 <= g - s["t"] <= 9.0 and s["outcome"] in ("goal", "on_target", "saved") and not s.get("inferred") for s in shots) for g in goal_times]
         quality["goals_found_as_shots"] = int(sum(matched))
         quality["goals_found_percent"] = round(100 * sum(matched) / len(goal_times), 1)
     (folder / "actions.json").write_text(json.dumps({"scopes": result, "quality": quality, "params": vars(a)}, indent=1))
@@ -369,8 +410,10 @@ def main():
             print(f"  {v:6d}  {k}")
     if goal_times:
         inferred = sum(1 for sh in shots if sh.get("inferred"))
-        print(f"goals given {len(goal_times)}; found from the ball track as a shot on target: {sum(matched)} ({quality['goals_found_percent']}%); "
-              f"the other {inferred} were added as shots from the position of the last control")
+        src = Counter(sh.get("origin") for sh in shots if sh.get("inferred"))
+        print(f"goals given {len(goal_times)} (from {goals_source}); found from the ball track as a shot on target: {sum(matched)} ({quality['goals_found_percent']}%); "
+              f"the other {inferred} were added as shots (origin: {src['control']} from a control of the scoring team, {src['ball']} from the last ball position)"
+              + (f"; {len(no_origin)} goals without any position of the shot: {', '.join(mmss(g) for g in no_origin)}" if no_origin else ""))
         miss = [mmss(g) for g, ok in zip(goal_times, matched) if not ok]
         if miss:
             print("goals without a shot found (the ball was probably not visible at the shot): " + ", ".join(miss))

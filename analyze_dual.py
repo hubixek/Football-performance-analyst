@@ -7,7 +7,7 @@ Steps (results in one folder, finished steps are skipped):
   1. detect           dual_detect.py     -> detections.csv
   2. ball             dual_ball.py       -> ball.csv, ball.png
   3. teams            dual_teams.py      -> teams.csv, teams_colors.json
-  4. goals (optional) match_events.py --goals -> restarts.json (only when --goals is given)
+  4. goals (optional) match_events.py --goals -> restarts.json (when --goals is given, or --auto-goals finds them with detect_goals.py)
   5. possession       dual_possession.py -> possession.csv, summary.json, possession.png
   6. tracks           dual_tracks.py     -> tracks.csv, players.csv, tracks_sample.png, players.png
 
@@ -18,6 +18,7 @@ Usage:
   python analyze_dual.py --match matches/mecz1.json --model ... --from-step teams
 """
 import argparse
+import csv
 import json
 import subprocess
 import sys
@@ -26,6 +27,16 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 STEPS = ["detect", "ball", "teams", "events", "possession", "tracks"]
+
+
+def goals_from_auto(path):
+    """The goal times (mm:ss) that detect_goals.py found: kick-offs recognised by the ball (goals_auto.csv, category goal)."""
+    goals = []
+    with open(path) as f:
+        for r in csv.DictReader(f):
+            if r.get("category") == "goal" and r.get("goal_s"):
+                goals.append(float(r["goal_s"]))
+    return ",".join(f"{int(g) // 60}:{int(g) % 60:02d}" for g in sorted(goals))
 
 
 def run(cmd):
@@ -47,6 +58,9 @@ def main():
     ap.add_argument("--force", action="store_true", help="rerun all steps")
     ap.add_argument("--goals", help="times of the goals, e.g. 14:21,21:29,38:04 (as in a video player): no possession "
                     "while the ball is fetched and the teams take their places after a goal")
+    ap.add_argument("--auto-goals", action="store_true",
+                    help="find the goals automatically (detect_goals.py: kick-offs recognised by the ball) when --goals is not given; "
+                         "to apply them to a finished analysis add --from-step events")
     ap.add_argument("--reuse-colors", action="store_true",
                     help="teams step: reuse the jersey colours of an earlier run (no video reading)")
     a = ap.parse_args()
@@ -95,6 +109,10 @@ def main():
             cmd.append("--reuse-colors")
         run(cmd)
         first = min(first, 3)
+    if a.auto_goals and not a.goals and files["teams"].exists():
+        run([py, HERE / "detect_goals.py", out, "--pitch", a.pitch, "--match", match])
+        a.goals = goals_from_auto(out / "goals_auto.csv")
+        print(f"goals found automatically: {a.goals}" if a.goals else "no goals found automatically")
     if a.goals and (needed("events") or a.from_step in ("events", "possession") or a.force):
         run([py, HERE / "match_events.py", out, "--pitch", a.pitch, "--goals", a.goals])
         first = min(first, 4)
