@@ -190,6 +190,9 @@ def main():
             t, h = frames[fr]
             w.writerow([fr, t, h, round(x, 2), round(y, 2), round(c, 3), src])
     n = len(frames)
+    if n == 0:
+        raise SystemExit("no detections of people in the file: the detection step found nothing (wrong or missing video, half times "
+                         "outside the video, or a calibration that does not fit)")
     det = sum(1 for v in ball.values() if v[3] == "detected")
     print(f"Frames: {n} | spare-ball spots: {len(spots) // 9} | ball detected: {100 * det / n:.1f}% "
           f"| with interpolation: {100 * len(ball) / n:.1f}%")

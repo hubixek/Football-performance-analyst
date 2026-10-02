@@ -29,7 +29,7 @@ Matches are recorded with a Veo camera at the halfway line. Two recordings exist
    team whose kit it resembles most, compared with the examples from the nearest kick-offs in time, so the
    change of light over the match is followed. Corrections: a player keeps his team along his track, and a
    team has at most five outfield players on the pitch. A goalkeeper belongs to the team that defends the goal
-   he stands at. Without kick-offs the shirt colour is clustered over the whole match (K-means).
+   he stands at. Without kick-offs the shirt colour is clustered over the whole match (K-means). By default (and with `--teams-method clf`) a linear classifier of the appearance (hue histogram, three body bands) is trained on the players of the kick-offs, which are labelled for free; on a night match with near-black and dark orange kits this told the teams apart in 94% of the judged crops where the colour centres managed 56-60% (83% after the correction of the classifier; on the day match 93% against 91%). The mistakes that remain at night are mostly black-clad players that the detector takes for the near-black referee.
 5. **Ball possession** – the player closest to the ball (within 1.5 m) controls it; possession changes
    after 0.3 s of control by the other team and stays with the passing team during a pass. Nobody has
    possession while the ball is out of the pitch (more than 1 m behind a line for at least 1 s) or lies
@@ -42,9 +42,22 @@ Matches are recorded with a Veo camera at the halfway line. Two recordings exist
 Only the playing time is analysed (half times are set per match, the half-time break is skipped).
 
 ## Example result
-The numbers of the example match are being re-measured after the last corrections of the team assignment
-(possession of a match is sensitive to it: between two versions of the analysis the same match moved by
-several points). They will be added here with the measured accuracy of the possession (see *Known limitations*).
+One command from the video to the report (`process_match.py`, below). Measured on two matches, one by day (`mecz1`, 54 min, 13 goals) and one at
+night under floodlights (`mecz4_2dual`, 53 min, 6 goals), against crops judged by eye and the official minutes of the goals from the match reports
+of the league:
+
+| | day | night |
+|---|---|---|
+| half times found automatically (against the whistles written by hand) | within 51 s | within 56 s |
+| team of a player, rows of the class player (the ones the statistics use) | 92% | 92% |
+| goals found, with a goal at that minute in the match report | 12 of 12 found, 12 of 13 goals | **6 of 6 found, 6 of 6 goals** |
+| the goal missed | 16th minute (the detector did not see the ball at the kick-off) | none |
+| ball position known | 83% of the frames | 83-95% |
+
+The goal rules (kick-offs recognised by the ball, a formation without a tracked ball but with the ball seen at a goal and on the centre spot, the same
+restart seen twice) were set on these two matches, so a third match is the real test of them. Shots and xG are not shown by the report (the ball
+track finds only 1 of 12 goals as a shot); the pass accuracy is reliable, the number of passes is a lower bound; the possession depends on
+the details of the detection by about 4 points.
 
 ![Top-down animation of the analysis](docs/overlay_mecz1_dual.gif)
 
@@ -52,8 +65,14 @@ several points). They will be added here with the measured accuracy of the posse
 ![Match statistics](docs/stats_mecz1_dual.png)
 
 ## Usage
+One command, nothing to write down by hand (half times, calibration, analysis, goals, statistics, report):
 ```bash
-# 1. half times of the match (asks for the start and the end of each half)
+python process_match.py ~/football/videos/mecz5_dual.mp4
+# open ~/football/analysis/mecz5_dual/report.html
+```
+The steps one by one (the same thing, with your own half times):
+```bash
+# 1. half times of the match (asks for the start and the end of each half; process_match.py finds them itself)
 python match_config.py ~/football/videos/mecz3_dual.mp4 --preview
 
 # 2. the whole analysis: calibration (from a reference match), detection, ball, teams, possession, tracks
@@ -71,16 +90,16 @@ python check_possessions.py ~/football/analysis/mecz3_dual --video ~/football/vi
 # 4. passes, shots, xG, corners (estimates; the goals are read from restarts.json or given with --goals)
 python match_actions.py ~/football/analysis/mecz3_dual --pitch pitch/pitch_6v6.json
 
-# 5. match report as one HTML page (open it in a browser)
-python match_report.py ~/football/analysis/mecz3_dual --pitch pitch/pitch_6v6.json --names "Team A,Team B" --score 11-2 --date 2026-09-20
+# 5. match report as one HTML page (open it in a browser); the score and the goals come from the goals found by the program
+python match_report.py ~/football/analysis/mecz3_dual --pitch pitch/pitch_6v6.json --match matches/mecz3.json --names "Team A,Team B" --date 2026-09-20
 
 # 6. top-down animation of 20 s of the match (MP4 and a small GIF)
 python render_overlay.py ~/football/analysis/mecz3_dual --pitch pitch/pitch_6v6.json --start 12:30 --duration 20 --gif
 ```
 Results in `~/football/analysis/<match>_dual/`: `detections.csv`, `ball.csv`, `teams.csv`, `possession.csv`,
 `summary.json`, `stats.json`, `tracks.csv`, `players.csv`, `team_distance.csv` and the plots.
-Optional: `--goals 14:21,21:29,...` gives the times of the goals, so that no possession is counted while
-the ball is fetched and the teams take their places after a goal.
+Goals: `analyze_dual.py --auto-goals` finds them (`detect_goals.py`) and gives them to the restarts, so that no possession is counted while the ball is
+fetched; `--goals 14:21,21:29,...` gives the times by hand.
 
 ## Pitch
 6v6 artificial pitch, 56 × 32.4 m. Penalty area 11.1 × 19.6 m, centre circle radius 4.75 m – estimated
@@ -103,7 +122,7 @@ on a satellite image. Definition with 19 keypoints: [`pitch/pitch_6v6.json`](pit
 | `check_possessions.py` | Cuts video clips of the longest possessions to check them by eye |
 | `match_events.py` | Restart windows after goals from given goal times (`--goals`) |
 | `match_actions.py` | Estimated passes, shots, xG, corners and entries into the penalty area from the ball track (with a check against the goals) |
-| `match_report.py` | Match report as one HTML page (top statistics, zones, team shape, possession timeline, heat maps, animation), the data also as JSON inside the page |
+| `match_report.py` | Match report as one HTML page (score and goals found automatically, top statistics, zones, team shape, possession timeline, heat maps, animation), the data also as JSON inside the page |
 | `render_overlay.py` | Top-down animation of the match (circles, ball, possession bar) as MP4 and GIF |
 | `draw_detections.py` | Short video of what the model detected (players by team, referees, ball candidates, the one the tracker used) |
 
@@ -128,9 +147,20 @@ on a satellite image. Definition with 19 keypoints: [`pitch/pitch_6v6.json`](pit
 | `compare_possession.py` | Picks moments (where analyses disagree, or random ones), saves an image of each with the ball marked; you write who had the ball; the answers of the analyses are kept apart so they do not steer you |
 | `score_possession.py` | Scores the possession of one or more analyses on the moments you judged |
 | `team_check.py` | Sheets of random player crops to judge by eye; scores how often the team assignment is right |
+| `team_features_probe.py` | Which description of a player's appearance (shirt colour, chroma, colour relative to the turf, body bands, histograms, a network embedding, optionally SigLIP with UMAP and K-means) separates the two teams best, with leave-one-out cross validation and without labels on the crops you judged |
 | `val_referee_check.py` | Referees and players in a validation set that labels only people on the pitch: found, lost, duplicates |
+| `referee_rule_probe.py` | Tests on the judged crops whether "at most one referee per lens and frame" would turn the players that the detector took for the referee into players |
 | `person_duplicates.py` | How many `referee` boxes lie on a `player` box in an analysis |
 | `cut_detections.py` | Trims the detections of a finished analysis to the first N seconds, to compare models on a short piece without the slow detector |
+| `detect_goals.py` | Goals found automatically: kick-offs recognised by the ball on the centre spot (17 of 17 judged were goals on two matches; the 13 kick-offs recognised only by the formation judged in the video were not), the scorer from the side of the goal and the direction of attack, the goal time from the ball at the goal; a formation-only kick-off with raw ball candidates on the centre spot in at least 6 frames is a goal too; goals just before the end of a half (no kick-off after them) are looked for in the net; goals missed but known from the video are added with `--add-goals` |
+| `goal_reel.py` | One short video with a clip around every goal estimate and a running clock, to confirm the goals and read their exact times |
+| `goal_trace.py` | One line per known goal: what the ball track and the possession look like just before it (why a shot is or is not recognised) |
+| `compare_goals.py` | Compares the goals found by `detect_goals.py` with the official minutes of the goals of the match (match clock with a fitted shift): found by the ball, explained only by a formation-only kick-off, or without any event |
+| `kickoff_ball_probe.py` | Checks whether the detector saw the ball on the centre spot at the kick-offs recognised only by the formation (the cheap hypothesis for the goals the program misses), against random moments |
+| `process_match.py` | **A match from the video to the report with one command**: half times (automatic), calibration, analysis, goals, statistics, passes and shots, report with the score and the names of the teams from the kit colours |
+| `auto_halves.py` | The half times found automatically from the number of players on the pitch (the break is the stretch without them) |
+| `list_kickoffs.py` | Lists the kick-offs found in an analysis, to write down the goal times without scanning the whole match |
+| `make_sheet.py` | Tiles several images into one sheet |
 
 The follow-cam version (moving view, positions in pixels) is kept in the tag `followcam-v1`.
 
@@ -219,13 +249,14 @@ Lessons: full frame resolution mattered most for the ball (v3 → v4), more matc
   kit switches this off with a warning.
 
 ## TODO
-- [x] Detection models (v1–v8), annotation workflow with pre-annotation and CVAT
-- [x] Fisheye calibration, pitch dimensions estimated from the image, automatic per-match calibration
+- [x] Detection models (v1-v8), annotation workflow with pre-annotation and CVAT
+- [x] Fisheye calibration, pitch dimensions estimated from the image, automatic per-match calibration (day, evening and floodlights)
 - [x] Dual-lens analysis in metres: detection, ball, teams and goalkeepers, possession, statistics, tracks
-- [x] Teams from the kick-offs, blind checks of the teams and of the possession, a second validation match
-- [ ] More annotated dual-lens matches (evening and night), hard frames: false balls on socks and heads, gaps in the ball track
-- [ ] Goal and kick-off detection (needs the better ball detection)
-- [ ] Possession accuracy measured on random moments, and the common mistakes of the possession logic
+- [x] Teams from the kick-offs with a classifier of the appearance, blind checks of the teams and of the possession
+- [x] Half times, goals and the score found automatically; one command from the video to the report
+- [ ] A third match as the independent test of the goal rules; the goal of the 16th minute of `mecz1` (the ball is not seen at that kick-off)
+- [ ] Possession accuracy measured on random moments (`compare_possession.py --random`)
+- [ ] More annotated dual-lens matches (evening and night): false balls on socks and heads, black kits against the near-black referee, gaps in the ball track; then shots and xG
 - [ ] Automated tests and CI
 
 ## Author

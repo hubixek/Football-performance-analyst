@@ -71,8 +71,9 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", help="output folder (default: <folder>/team_check)")
     ap.add_argument("--score", action="store_true")
-    ap.add_argument("--answers-from", help="--score: take the answers from this teams.csv (e.g. after a change of the method) "
-                    "instead of the ones saved when the crops were made")
+    ap.add_argument("--answers-from", help="--score: take the answers from this teams.csv (default: the teams.csv of the analysis folder, "
+                    "i.e. the CURRENT result)")
+    ap.add_argument("--stored", action="store_true", help="--score: use the answers saved when the crops were made (the method of that time) instead")
     a = ap.parse_args()
 
     folder = Path(a.folder).expanduser()
@@ -82,9 +83,10 @@ def main():
     if a.score:
         truth = {r["id"]: r["truth"].strip().lower() for r in csv.DictReader(open(sheet_csv))}
         key = list(csv.DictReader(open(key_csv)))
-        if a.answers_from:
+        answers_from = a.answers_from or (None if a.stored or not (folder / "teams.csv").exists() else str(folder / "teams.csv"))
+        if answers_from:
             now = {}
-            with open(Path(a.answers_from).expanduser()) as f:
+            with open(Path(answers_from).expanduser()) as f:
                 for r in csv.DictReader(f):
                     now[(r["frame"], r["cam"], round(float(r["x1"]), 1), round(float(r["y1"]), 1))] = r
             missing = 0
@@ -94,7 +96,9 @@ def main():
                     missing += 1
                     continue
                 k["class"], k["team"], k["gk"] = r["class"], r.get("team", ""), r.get("gk", "")
-            print(f"answers taken from {a.answers_from}" + (f" ({missing} crops not found there, old answers kept)" if missing else ""))
+            print(f"answers taken from {answers_from}" + (f" ({missing} crops not found there, old answers kept)" if missing else ""))
+        else:
+            print("answers taken from the file saved when the crops were made (the method of that time)")
         done = [k for k in key if truth.get(k["id"], "") in ("0", "1", "r")]
         if not done:
             raise SystemExit(f"fill in the column 'truth' in {sheet_csv} first (0, 1, r or x)")
@@ -107,6 +111,12 @@ def main():
         print("really \\ analysis:   team 0   team 1   referee   unknown")
         for t, name in (("0", "team 0"), ("1", "team 1"), ("r", "referee")):
             print(f"{name:18s} {conf[(t, '0')]:7d} {conf[(t, '1')]:8d} {conf[(t, 'r')]:9d} {conf[(t, '?')]:9d}")
+        pl = [k for k in done if k["class"] == "player"]
+        rf = [k for k in done if k["class"] == "referee"]
+        print(f"rows of the class player (the ones the team statistics use): right in {sum(ana(k) == truth[k['id']] for k in pl)} of {len(pl)} "
+              f"({100 * sum(ana(k) == truth[k['id']] for k in pl) / max(len(pl), 1):.0f}%)")
+        print(f"rows of the class referee: {len(rf)}, of them {sum(truth[k['id']] in ('0', '1') for k in rf)} are players by your judgement "
+              f"(a person can have a second row of the class player: referee_rule_probe.py checks it)")
         gk = [k for k in done if k.get("gk") == "1"]
         if gk:
             print(f"goalkeepers among them: {len(gk)}, right {sum(ana(k) == truth[k['id']] for k in gk)}")

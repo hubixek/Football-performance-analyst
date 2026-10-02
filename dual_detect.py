@@ -103,6 +103,8 @@ def main():
     names = model.names
 
     cap = cv2.VideoCapture(str(Path(a.video).expanduser()))
+    if not cap.isOpened() or cap.get(cv2.CAP_PROP_FRAME_COUNT) < 1:
+        raise SystemExit(f"cannot open the video {a.video} (does the file exist, and is it a video?)")
     fps = cap.get(cv2.CAP_PROP_FPS) or 29.97
     out = Path(a.out).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -144,7 +146,9 @@ def main():
                 if done % 500 == 0:
                     print(f"{done}/{total} frames", flush=True)
     cap.release()
-    print(f"Saved {out}")
+    if done == 0:
+        raise SystemExit("no frame was processed: the half times of the match config lie outside the video, or the video cannot be read")
+    print(f"Saved {out} ({done} frames)")
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ TEXT = {
         "thirds": "GDZIE DRUŻYNA MIAŁA PIŁKĘ", "own_third": "Własna tercja", "middle_third": "Środkowa tercja", "final_third": "Tercja ataku",
         "shape": "USTAWIENIE DRUŻYNY", "avg_position": "Średnia pozycja (m od własnej bramki)",
         "length": "Długość ustawienia (m)", "width": "Szerokość ustawienia (m)",
-        "goals": "GOLE", "goals_auto": "wykryte automatycznie z wznowień i toru piłki; czas gola jest oszacowaniem (±kilka sekund)",
+        "goals_missing": "Program wykrył {n} z {total} goli; brakujących nie ma na liście.", "goals": "GOLE", "goals_auto": "wykryte automatycznie z wznowień i toru piłki; czas gola jest oszacowaniem (±kilka sekund)",
         "score_auto": "wynik z automatycznie wykrytych goli", "goal_minute": "{m}. minuta",
         "timeline": "PRZEBIEG POSIADANIA", "timeline_note": "Udział drużyny w posiadaniu w ostatniej minucie, oś: minuta gry",
         "half": "{n}. połowa", "heat": "GDZIE GRALI ZAWODNICY", "heat_note": "Mapy ciepła, każda drużyna atakuje w prawo",
@@ -71,7 +71,7 @@ TEXT = {
         "thirds": "WHERE THE TEAM HAD THE BALL", "own_third": "Own third", "middle_third": "Middle third", "final_third": "Final third",
         "shape": "TEAM SHAPE", "avg_position": "Average position (m from own goal)",
         "length": "Length of the team (m)", "width": "Width of the team (m)",
-        "goals": "GOALS", "goals_auto": "found automatically from the kick-offs and the ball track; the time of a goal is an estimate (a few seconds)",
+        "goals_missing": "The program found {n} of the {total} goals; the missing ones are not listed.", "goals": "GOALS", "goals_auto": "found automatically from the kick-offs and the ball track; the time of a goal is an estimate (a few seconds)",
         "score_auto": "score from the goals found automatically", "goal_minute": "minute {m}",
         "timeline": "POSSESSION TIMELINE", "timeline_note": "Share of possession in the last minute, axis: minute of play",
         "half": "Half {n}", "heat": "WHERE THE PLAYERS PLAYED", "heat_note": "Heat maps, every team attacks to the right",
@@ -260,12 +260,15 @@ def load_goals(folder, match_path):
     if not path.exists():
         return []
     starts, lens = {}, {}
+    with open(path) as f:                                          # the first kick-off of every half: the clock of the match starts there
+        kick = {int(r["half"]): float(r["kickoff_s"]) for r in csv.DictReader(f) if r["category"] == "start of the half"}
     if match_path:
         cfg = json.loads(Path(match_path).expanduser().read_text())
         acc = 0.0
         for i, h in enumerate(cfg["halves"], 1):
-            starts[i], lens[i] = (h["start_s"], acc), h["end_s"] - h["start_s"]
-            acc += h["end_s"] - h["start_s"]
+            t0 = kick.get(i, h["start_s"])
+            starts[i], lens[i] = (t0, acc), h["end_s"] - t0
+            acc += h["end_s"] - t0
     out = []
     with open(path) as f:
         for r in csv.DictReader(f):
@@ -278,7 +281,7 @@ def load_goals(folder, match_path):
     return sorted(out, key=lambda g: g["recording_s"])
 
 
-def goals_panel(goals, T, names, colors):
+def goals_panel(goals, T, names, colors, total=None):
     if not goals:
         return ""
     rows = []
@@ -286,7 +289,8 @@ def goals_panel(goals, T, names, colors):
         when = T["goal_minute"].format(m=g["minute"]) if g["minute"] else f"{int(g['recording_s']) // 60:02d}:{int(g['recording_s']) % 60:02d}"
         who = (f'<span class="dot" style="background:{colors[g["team"]]}"></span>{html.escape(names[g["team"]])}' if g["team"] in (0, 1) else "?")
         rows.append(f'<div class="goal"><span class="m">{when}{"<span class=rough> ~</span>" if g["rough"] else ""}</span>{who}</div>')
-    return f'<div class="panel"><h3>{T["goals"]}</h3><p class="note">{T["goals_auto"]}</p>{"".join(rows)}</div>'
+    miss = f'<p class="note">{T["goals_missing"].format(n=len(goals), total=total)}</p>' if total and total > len(goals) else ""
+    return f'<div class="panel"><h3>{T["goals"]}</h3><p class="note">{T["goals_auto"]}</p>{"".join(rows)}{miss}</div>'
 
 
 def timeline_svg(path, T, names, colors, step=5.0, window=60.0):
@@ -445,7 +449,7 @@ def main():
 </div>
 <div class="tabs">{tabs}</div>
 {panes}
-{goals_panel(goals, T, names, colors)}
+{goals_panel(goals, T, names, colors, total=(int(score[0]) + int(score[1])) if (score[0].isdigit() and score[1].isdigit()) else None)}
 {timeline_svg(folder / "possession.csv", T, names, colors)}
 {heat_svg(folder / "tracks.csv", stats, pitch, T, names, colors)}
 {gif}

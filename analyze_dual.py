@@ -61,16 +61,30 @@ def main():
     ap.add_argument("--auto-goals", action="store_true",
                     help="find the goals automatically (detect_goals.py: kick-offs recognised by the ball) when --goals is not given; "
                          "to apply them to a finished analysis add --from-step events")
+    ap.add_argument("--teams-method", choices=["auto", "kickoff", "colour", "clf"], default="auto",
+                    help="how the teams are found (dual_teams.py --method): kickoff = from the kick-offs, colour = shirt colour over the whole "
+                         "match, clf = a classifier of the appearance trained on the kick-offs, auto = kick-offs when enough are usable (default)")
+    ap.add_argument("--teams-self-train", type=int, default=0, help="--teams-method clf: rounds of learning again with the sure detections of the whole match")
     ap.add_argument("--reuse-colors", action="store_true",
                     help="teams step: reuse the jersey colours of an earlier run (no video reading)")
     a = ap.parse_args()
 
     match = Path(a.match).expanduser().resolve()
-    cfg = json.loads(match.read_text())
+    try:
+        cfg = json.loads(match.read_text())
+    except json.JSONDecodeError as e:
+        line = match.read_text().splitlines()[e.lineno - 1] if e.lineno else ""
+        raise SystemExit(f"the match config {match} is not valid JSON: line {e.lineno}, column {e.colno}: {line.strip()!r}\n"
+                         f"(a text value needs quotes, e.g. \"video\": \"mecz4_2dual.mp4\", with a comma at the end of the line)")
     name = cfg["name"]
     video = Path(a.videos).expanduser() / cfg["video"]
     if not video.exists():
         video = Path(a.videos).expanduser() / f"{name}_dual.mp4"
+    if not video.exists():
+        videos = sorted(p.name for p in Path(a.videos).expanduser().glob("*.mp4"))
+        raise SystemExit(f"video not found: tried {Path(a.videos).expanduser() / cfg['video']} and {video}\n"
+                         f"the field \"video\" of {match} is '{cfg['video']}'; the videos in {Path(a.videos).expanduser()}: "
+                         f"{', '.join(videos) or 'none'}\nfix the field (or the --videos folder) and run again")
     cdir = Path(a.calib_dir).expanduser()
     out = Path(a.out_dir).expanduser() if a.out_dir else Path.home() / "football" / "analysis" / f"{name}_dual"
     out.mkdir(parents=True, exist_ok=True)
@@ -105,6 +119,9 @@ def main():
         first = min(first, 2)
     if needed("teams"):
         cmd = [py, HERE / "dual_teams.py", files["detect"], "--video", video, "--out", files["teams"], "--ball", files["ball"]]
+        cmd += ["--method", a.teams_method]
+        if a.teams_self_train:
+            cmd += ["--self-train", str(a.teams_self_train)]
         if a.reuse_colors:
             cmd.append("--reuse-colors")
         run(cmd)
