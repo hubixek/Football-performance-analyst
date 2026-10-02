@@ -105,7 +105,7 @@ fetched; `--goals 14:21,21:29,...` gives the times by hand.
 
 ## Tests
 ```bash
-python -m unittest discover -s tests -v     # about 10 s, no GPU and no model needed (30 tests)
+python -m unittest discover -s tests -v     # about 10 s, no GPU and no model needed (35 tests)
 ```
 The tests cover the half times (`auto_halves.py`), the goals on a small synthetic match with known goals, the same restart seen twice, the comparison with
 the minutes of the match report, the team classifier, the one-command runner (as a dry run) and the minutes in the report. GitHub Actions runs them on every push.
@@ -168,6 +168,7 @@ on a satellite image. Definition with 19 keypoints: [`pitch/pitch_6v6.json`](pit
 | `kickoff_ball_probe.py` | Checks whether the detector saw the ball on the centre spot at the kick-offs recognised only by the formation (the cheap hypothesis for the goals the program misses), against random moments |
 | `process_match.py` | **A match from the video to the report with one command**: half times (automatic), calibration, analysis, goals, statistics, passes and shots, report with the score and the names of the teams from the kit colours |
 | `auto_halves.py` | The half times found automatically from the number of players on the pitch (the break is the stretch without them) |
+| `tidy_project.py` | A safe cleanup: a dry run by default, deletes only the junk with `--apply` (the rest only with `--also`), copies the evaluation data into `eval/` |
 | `list_kickoffs.py` | Lists the kick-offs found in an analysis, to write down the goal times without scanning the whole match |
 | `make_sheet.py` | Tiles several images into one sheet |
 

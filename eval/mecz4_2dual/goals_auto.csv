@@ -1,0 +1,15 @@
+half,kickoff_s,kickoff,gap_s,how,category,goal_s,goal,goal_time_is_rough,side,frames_near_goal,scored_by_side,scored_by_kicker,scorer
+1,63.4,01:03,,formation,start of the half,26.7,00:26,0,right,12,,,
+1,495.3,08:15,432.0,formation,no,,,0,,5,,,
+1,651.9,10:51,156.5,formation,no,615.4,10:15,0,right,10,0,0,0
+1,935.8,15:35,284.0,ball,goal,924.9,15:24,0,right,52,0,0,0
+1,1033.8,17:13,98.0,formation,no,,,0,,0,,,
+1,1110.3,18:30,76.5,ball,goal,1091.6,18:11,0,right,103,0,0,0
+1,1176.1,19:36,65.8,ball,goal,1156.2,19:16,0,left,8,1,1,1
+1,1274.3,21:14,98.2,formation,no,,,0,,0,,1,1
+1,1449.8,24:09,175.4,ball,goal,1434.8,23:54,1,,2,,1,1
+2,1698.5,28:18,,ball,start of the half,,,0,,0,,,
+2,1782.7,29:42,84.2,formation,no,,,0,,0,,,
+2,2268.7,37:48,486.0,ball (raw),goal,2251.9,37:31,0,right,31,1,1,1
+2,2484.6,41:24,215.9,formation,no,2460.8,41:00,0,left,28,0,1,0
+2,2553.8,42:33,69.2,ball,goal,2531.0,42:11,0,right,17,1,1,1

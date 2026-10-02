@@ -6,3 +6,11 @@ __pycache__/
 *.pt
 *.npz
 .ipynb_checkpoints/
+
+# added by tidy_project.py
+.pytest_cache/
+*.avi
+*.tar.gz
+nohup.out
+analysis/
+runs/
