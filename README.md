@@ -54,7 +54,9 @@ of the league:
 | the goal missed | 16th minute (the detector did not see the ball at the kick-off) | none |
 | ball position known | 83% of the frames | 83-95% |
 
-The goal rules (kick-offs recognised by the ball, a formation without a tracked ball but with the ball seen at a goal and on the centre spot, the same
+The day match was not processed from scratch with `process_match.py` in one run (the steps were checked separately: the calibration from scratch
+explained 70% of the lines, the half times were within 51 s, the goals above come from the run with the calibration made by hand), and the night match
+was processed from scratch twice. The goal rules (kick-offs recognised by the ball, a formation without a tracked ball but with the ball seen at a goal and on the centre spot, the same
 restart seen twice) were set on these two matches, so a third match is the real test of them. Shots and xG are not shown by the report (the ball
 track finds only 1 of 12 goals as a shot); the pass accuracy is reliable, the number of passes is a lower bound; the possession depends on
 the details of the detection by about 4 points.
@@ -100,6 +102,13 @@ Results in `~/football/analysis/<match>_dual/`: `detections.csv`, `ball.csv`, `t
 `summary.json`, `stats.json`, `tracks.csv`, `players.csv`, `team_distance.csv` and the plots.
 Goals: `analyze_dual.py --auto-goals` finds them (`detect_goals.py`) and gives them to the restarts, so that no possession is counted while the ball is
 fetched; `--goals 14:21,21:29,...` gives the times by hand.
+
+## Tests
+```bash
+python -m unittest discover -s tests -v     # about 10 s, no GPU and no model needed (30 tests)
+```
+The tests cover the half times (`auto_halves.py`), the goals on a small synthetic match with known goals, the same restart seen twice, the comparison with
+the minutes of the match report, the team classifier, the one-command runner (as a dry run) and the minutes in the report. GitHub Actions runs them on every push.
 
 ## Pitch
 6v6 artificial pitch, 56 × 32.4 m. Penalty area 11.1 × 19.6 m, centre circle radius 4.75 m – estimated
@@ -257,7 +266,8 @@ Lessons: full frame resolution mattered most for the ball (v3 → v4), more matc
 - [ ] A third match as the independent test of the goal rules; the goal of the 16th minute of `mecz1` (the ball is not seen at that kick-off)
 - [ ] Possession accuracy measured on random moments (`compare_possession.py --random`)
 - [ ] More annotated dual-lens matches (evening and night): false balls on socks and heads, black kits against the near-black referee, gaps in the ball track; then shots and xG
-- [ ] Automated tests and CI
+- [x] Automated tests (`python -m unittest discover -s tests`: half times, goals on a synthetic match, comparison with the match report, teams, runner, report) and CI (GitHub Actions)
+- [ ] The Docker image is written but was not built by the author
 
 ## Author
 Hubert – [GitHub](https://github.com/hubixek)

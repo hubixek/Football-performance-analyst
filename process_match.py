@@ -99,18 +99,19 @@ def main():
     T = lambda f: str(HERE / f)
     print(f"match {name}: video {video}, analysis in {out}")
 
-    # 1. half times
+    # 1. half times (a provisional config of the whole recording, left by an interrupted run, is not a result)
     have_calib = all((cdir / f"{name}_{c}.json").exists() for c in ("top", "bottom"))
-    if a.force or not cfg.exists():
+    cfg_done = cfg.exists() and not json.loads(cfg.read_text()).get("provisional", False)
+    if a.force or not cfg_done:
         if a.force or not have_calib:
             cap = cv2.VideoCapture(str(video)) if not a.dry_run else None
             dur = (cap.get(cv2.CAP_PROP_FRAME_COUNT) / (cap.get(cv2.CAP_PROP_FPS) or 29.97)) if cap is not None else 3300.0
-            prov = {"name": name, "video": video.name, "halves": [{"start": "00:00:00", "end": "", "start_s": 0.0, "end_s": float(int(dur))}],
+            prov = {"name": name, "video": video.name, "provisional": True, "halves": [{"start": "00:00:00", "end": "", "start_s": 0.0, "end_s": float(int(dur))}],
                     "calibration": {c: f"calib/{name}_{c}.json" for c in ("top", "bottom")}}
             if not a.dry_run:
                 cfg.parent.mkdir(parents=True, exist_ok=True)
                 cfg.write_text(json.dumps(prov, indent=2))
-            print(f"\n(provisional config of the whole recording written to {cfg})")
+            print(f"\n(provisional config of the whole recording written to {cfg}; auto_halves.py replaces it)")
         if a.force or not have_calib:
             R.run("calibration", [R.py, T("calibrate_match.py"), video, "--name", name, "--ref", a.ref, "--calib-dir", cdir,
                                   "--pitch", pitch, "--match", cfg, "--model", model])

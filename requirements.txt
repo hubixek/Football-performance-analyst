@@ -1,0 +1,7 @@
+# analysis of a match (process_match.py and the scripts it calls); the versions are not pinned
+ultralytics        # YOLOv8 detection (installs torch; use the build for your GPU)
+opencv-python
+numpy
+scipy
+matplotlib
+# the tests need only: numpy, opencv-python-headless (python -m unittest discover -s tests)
