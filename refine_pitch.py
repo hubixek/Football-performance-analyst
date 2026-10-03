@@ -24,6 +24,7 @@ from scipy.optimize import least_squares
 from calibrate import (fisheye_project, fit_fisheye, line_geometry, pixels_to_pitch, rmse, sample_line,
                        save_check_image, world_distance)
 from fit_pitch_dims import keypoints
+import config
 
 
 def load(points_path, pitch):
@@ -133,7 +134,7 @@ def joint_fit(pitch, halves, keys):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", required=True, help="match name, e.g. mecz2")
-    ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"))
+    ap.add_argument("--calib-dir", default=str(config.CALIB_DIR))
     ap.add_argument("--pitch", required=True)
     ap.add_argument("--out-pitch", required=True, help="pitch definition with the estimated dimensions")
     ap.add_argument("--iters", type=int, default=10)

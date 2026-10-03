@@ -15,12 +15,13 @@ import csv
 import json
 from collections import Counter
 from pathlib import Path
+import config
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("folders", nargs="+")
-    ap.add_argument("--truth-dir", default=str(Path.home() / "football" / "analysis" / "mecz1_dual_v8" / "disagreements"),
+    ap.add_argument("--truth-dir", default=str(config.ANALYSIS_DIR / "mecz1_dual_v8" / "disagreements"),
                     help="folder with disagreements.csv (your truth) and .answers_of_the_analyses.csv (times)")
     ap.add_argument("--table", action="store_true")
     a = ap.parse_args()

@@ -1,0 +1,11 @@
+{
+  "match": "mecz4_3dual",
+  "source": "league match report, copied by the author (no names of the scorers)",
+  "conditions": "daylight",
+  "goal_minutes": [14, 19, 24, 28, 33, 38, 39, 42, 43, 45],
+  "minutes_of_team_listed_first": [14, 24, 28, 33, 39, 45],
+  "minutes_of_team_listed_second": [19, 38, 42, 43],
+  "half_time_score": "2-1",
+  "final_score": "6-4",
+  "note": "the clock of the second half starts at 25:00 (as in mecz1); which program team (0/1) is the team listed first is not known"
+}

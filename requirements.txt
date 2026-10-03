@@ -1,7 +1,8 @@
-# analysis of a match (process_match.py and the scripts it calls); the versions are not pinned
-ultralytics        # YOLOv8 detection (installs torch; use the build for your GPU)
-opencv-python
-numpy
-scipy
-matplotlib
-# the tests need only: numpy, opencv-python-headless (python -m unittest discover -s tests)
+# analysis of a match (process_match.py and the scripts it calls)
+# The versions are the ones the author runs (Python 3.14, Linux/WSL2, RTX 3070). Other versions may work; these are the tested ones.
+ultralytics==8.4.161        # YOLOv8 detection; installs torch (the author uses torch 2.14.0; for a GPU use the build for your CUDA from pytorch.org)
+opencv-python==5.0.0.93
+numpy==2.5.3
+scipy==1.18.1
+matplotlib==3.11.2
+# the tests need only: numpy, opencv-python-headless, matplotlib (python -m unittest discover -s tests); without matplotlib two tests are skipped

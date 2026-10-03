@@ -25,6 +25,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import config
 
 CAMS = ("top", "bottom")
 
@@ -139,7 +140,7 @@ def main():
     ap.add_argument("--match", required=True)
     ap.add_argument("--model", required=True)
     ap.add_argument("--pitch", required=True)
-    ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"))
+    ap.add_argument("--calib-dir", default=str(config.CALIB_DIR))
     ap.add_argument("--conf", type=float, default=0.02, help="detection confidence (dual_detect.py uses 0.1)")
     ap.add_argument("--imgsz", type=int, default=2048)
     ap.add_argument("--max-cands", type=int, default=8)

@@ -26,6 +26,7 @@ import math
 from pathlib import Path
 
 import numpy as np
+import config
 
 KEY_DET, KEY_WIN = ".answers_detections.csv", ".answers_windows.csv"
 ON_TARGET = ("goal", "saved", "on_target")
@@ -33,6 +34,10 @@ ON_TARGET = ("goal", "saved", "on_target")
 
 def mmss(t):
     return f"{int(t) // 60:02d}:{int(t) % 60:02d}"
+
+
+def lo_hi(value, dist):
+    return not np.isnan(value) and dist[0] <= value < dist[1]
 
 
 def load_actions(path):
@@ -61,9 +66,15 @@ def load_possession(path):
     return np.array(fr), np.array(t), np.array(h), np.array(bx), np.array(by), np.array(ip)
 
 
-def pick_detections(actions, kind, n, gap, rng):
-    """n random actions of one kind at least gap seconds apart, in time order."""
-    cand = [a for a in actions if a["type"] == kind]
+def pass_length(a):
+    """Length of a pass in metres (NaN when its end is not known)."""
+    return float(np.hypot(a["x2"] - a["x"], a["y2"] - a["y"]))
+
+
+def pick_detections(actions, kind, n, gap, rng, dist=None):
+    """n random actions of one kind at least gap seconds apart, in time order.
+    dist = (lo, hi): only passes whose length is in [lo, hi) metres (to judge the short ones on their own)."""
+    cand = [a for a in actions if a["type"] == kind and (dist is None or kind != "pass" or lo_hi(pass_length(a), dist))]
     order = rng.permutation(len(cand))
     chosen = []
     for i in order:
@@ -123,7 +134,7 @@ def yn(v):
     return True if v == "y" else False if v == "n" else None
 
 
-def score(det_rows, det_key, win_rows, win_key):
+def score(det_rows, det_key, win_rows, win_key, sample=None):
     """Returns a dict with precision, agreement and recall estimates from the filled-in sheets and the hidden answers of the program."""
     truth = {r["id"]: r for r in det_rows}
     res = {}
@@ -152,7 +163,9 @@ def score(det_rows, det_key, win_rows, win_key):
         s["windows"] = len(pairs)
         s["user_count"] = sum(u for u, _ in pairs)
         s["program_count"] = sum(p for _, p in pairs)
-        if s["user_count"] and "precision" in s:
+        limited = bool(sample) and ((kind == "pass" and sample.get("pass_dist")) or sample.get("only") == ("shots" if kind == "pass" else "passes"))
+        s["recall_not_estimated"] = limited
+        if s["user_count"] and "precision" in s and not limited:
             s["recall_estimate"] = min(1.0, s["program_count"] * s["precision"] / s["user_count"])
     return res
 
@@ -233,6 +246,9 @@ def print_score(res):
             line = f"  windows: you counted {s['user_count']}, the program {s['program_count']} in {s['windows']} windows"
             if "recall_estimate" in s:
                 line += f" -> estimated recall {100 * s['recall_estimate']:.0f}% (program count x precision / your count)"
+            elif s.get("recall_not_estimated"):
+                line += (" -> no recall estimate: the judged sample covers only a range of lengths, so its precision is not the precision of all the passes in the windows"
+                         if kind == "pass" else " -> no recall estimate: no shots were judged in this sample")
             print(line)
     print("small samples: read the intervals, not only the percentages")
 
@@ -242,13 +258,15 @@ def main():
     ap.add_argument("folder", help="analysis folder with actions.csv and possession.csv (match_actions.py output)")
     ap.add_argument("--video")
     ap.add_argument("--name", help="name of the match (calibration files)")
-    ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"))
+    ap.add_argument("--calib-dir", default=str(config.CALIB_DIR))
     ap.add_argument("--n", type=int, default=30, help="passes, shots and windows to judge")
     ap.add_argument("--win", type=float, default=10.0, help="length of a window, s")
     ap.add_argument("--gap", type=float, default=15.0, help="detections at least this far apart, s")
     ap.add_argument("--pre", type=float, default=2.5, help="seconds of a clip before the action")
     ap.add_argument("--post", type=float, default=3.5, help="seconds of a clip after the action")
     ap.add_argument("--out", help="output folder (default: <folder>/action_check)")
+    ap.add_argument("--pass-dist", help="LO,HI: judge only passes of this length in metres, e.g. 2,4 for the short ones that --pass-min-d 4 leaves out")
+    ap.add_argument("--only", choices=["passes", "shots"], help="cut the clips of one kind only")
     ap.add_argument("--windows-from", help="folder of an earlier run: reuse its windows and your counts, refresh the counts of the program")
     ap.add_argument("--score", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
@@ -258,7 +276,9 @@ def main():
     out = Path(a.out).expanduser() if a.out else folder / "action_check"
 
     if a.score:
-        res = score(read_csv(out / "detections.csv"), read_csv(out / KEY_DET), read_csv(out / "windows.csv"), read_csv(out / KEY_WIN))
+        sample_file = out / "sample.json"
+        res = score(read_csv(out / "detections.csv"), read_csv(out / KEY_DET), read_csv(out / "windows.csv"), read_csv(out / KEY_WIN),
+                    json.loads(sample_file.read_text()) if sample_file.exists() else None)
         print_score(res)
         return
     if not a.video or not a.name:
@@ -268,11 +288,15 @@ def main():
     actions = load_actions(folder / "actions.csv")
     fr, t, half, bx, by, ip = load_possession(folder / "possession.csv")
     rng = np.random.default_rng(a.seed)
-    dets = pick_detections(actions, "pass", a.n, a.gap, rng) + pick_detections(actions, "shot", a.n, a.gap, rng)
+    dist = tuple(float(v) for v in a.pass_dist.split(",")) if a.pass_dist else None
+    dets = ([] if a.only == "shots" else pick_detections(actions, "pass", a.n, a.gap, rng, dist)) + \
+        ([] if a.only == "passes" else pick_detections(actions, "shot", a.n, a.gap, rng))
     wins = [] if a.windows_from else pick_windows(t, half, ~np.isnan(bx), ip, a.n, a.win, rng)
     cdir = Path(a.calib_dir).expanduser()
     calibs = {p: json.loads((cdir / f"{a.name}_{p}.json").read_text()) for p in ("top", "bottom")}
     cap = cv2.VideoCapture(str(Path(a.video).expanduser()))
+    if not cap.isOpened() or cap.get(cv2.CAP_PROP_FRAME_COUNT) < 1:
+        raise SystemExit(f"cannot open the video {a.video} (does the file exist, and is it a video?)")
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     out.mkdir(parents=True, exist_ok=True)
 
@@ -308,6 +332,7 @@ def main():
         win_rows = read_csv(old / "windows.csv")
         win_key = refresh_window_key(read_csv(old / KEY_WIN), actions)
     cap.release()
+    (out / "sample.json").write_text(json.dumps({"pass_dist": list(dist) if dist else None, "only": a.only}))
     write_csv(out / "detections.csv", ["id", "type", "time", "clip", "real", "completed", "on_target"], det_rows)
     write_csv(out / KEY_DET, ["id", "type", "time_s", "program_outcome", "inferred"], det_key)
     write_csv(out / "windows.csv", ["id", "time", "clip", "passes", "shots"], win_rows)
