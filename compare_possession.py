@@ -22,6 +22,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import config
 
 
 def load(folder):
@@ -43,7 +44,7 @@ def main():
     ap.add_argument("folders", nargs="+", help="two or more analysis folders of the same match")
     ap.add_argument("--video", required=True)
     ap.add_argument("--name", required=True, help="name of the match (for the calibration files)")
-    ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"))
+    ap.add_argument("--calib-dir", default=str(config.CALIB_DIR))
     ap.add_argument("--labels", help="names of the analyses, comma separated, in the order of the folders (default A,B,C...)")
     ap.add_argument("--n", type=int, default=30, help="how many moments to check")
     ap.add_argument("--gap", type=float, default=20.0, help="moments at least this far apart, s")

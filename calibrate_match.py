@@ -28,6 +28,7 @@ from scipy.spatial import cKDTree
 
 from auto_calibrate import drop_blobs, line_mask, pitch_area
 from calibrate import _look_at, densify, fisheye_project, pitch_lines
+import config
 
 HALVES = ("top", "bottom")
 
@@ -272,11 +273,11 @@ def main():
     ap.add_argument("video", help="dual-lens match video")
     ap.add_argument("--name", required=True, help="name of the new match, e.g. mecz1")
     ap.add_argument("--ref", required=True, help="reference match with a good calibration, e.g. mecz2")
-    ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"))
+    ap.add_argument("--calib-dir", default=str(config.CALIB_DIR))
     ap.add_argument("--pitch", required=True)
     ap.add_argument("--match", help="match config (half times) - background from the playing time only")
     ap.add_argument("--frames", type=int, default=100, help="frames per lens for the empty pitch and the player positions")
-    ap.add_argument("--model", default=str(Path.home() / "football" / "runs" / "detect" / "runs" / "v7_dual" / "weights" / "best.pt"),
+    ap.add_argument("--model", default=str(config.model_path("v7_dual")),
                     help="detection model: where the players stood limits the area of the pitch lines (else: movement)")
     ap.add_argument("--save-masks", action="store_true", help="save <name>_<lens>.mask.jpg: detected lines (red), player positions "
                     "(yellow) and the area kept (bright)")

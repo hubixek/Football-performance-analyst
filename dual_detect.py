@@ -30,6 +30,7 @@ import cv2
 import numpy as np
 
 from calibrate import pixels_to_pitch
+import config
 
 CAMS = ("top", "bottom")
 
@@ -79,7 +80,7 @@ def main():
     ap.add_argument("video")
     ap.add_argument("--match", required=True, help="match config with half times")
     ap.add_argument("--model", required=True)
-    ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"))
+    ap.add_argument("--calib-dir", default=str(config.CALIB_DIR))
     ap.add_argument("--pitch", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--imgsz", type=int, default=2048)

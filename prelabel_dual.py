@@ -22,6 +22,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from calibrate import pixels_to_pitch
+import config
 
 NAMES = ["player", "referee", "ball"]
 
@@ -37,7 +38,7 @@ def main():
     ap.add_argument("frames", help="folder from extract_dual_frames.py")
     ap.add_argument("--name", required=True, help="match name (for the calibration files)")
     ap.add_argument("--model", required=True)
-    ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"))
+    ap.add_argument("--calib-dir", default=str(config.CALIB_DIR))
     ap.add_argument("--pitch", help="pitch definition (needed for the filter)")
     ap.add_argument("--no-filter", action="store_true",
                     help="keep all detections, no calibration needed (people outside the pitch must then be removed in CVAT)")

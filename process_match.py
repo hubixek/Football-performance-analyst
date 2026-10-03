@@ -9,7 +9,7 @@ The name of the match is the name of the video without "_dual" (--name changes i
   2. analysis       detection, ball, teams (classifier trained on the kick-offs), goals (detect_goals.py), possession, tracks (analyze_dual.py)
   3. statistics     match_stats.py, then the goals again (now with the direction of attack, so the scorers come from the side of the goal), the
                     steps after the goals once more, passes and shots (match_actions.py)
-  4. report         report.html (match_report.py): the score and the goals found by the program, the names of the teams from the colour of
+  4. report         quality.json (quality.py: is the analysis trustworthy?), then report.html (match_report.py): the score and the goals found by the program, the names of the teams from the colour of
                     the kits (--names changes them), the date from the video file (--date changes it)
 
 Nothing from the match report of the league is needed. The result: <analysis folder>/report.html and a short summary on the screen.
@@ -28,9 +28,10 @@ import sys
 from pathlib import Path
 
 import cv2
+import config
 
 HERE = Path(__file__).resolve().parent
-HOME = Path.home() / "football"
+HOME = config.HOME
 
 
 def kit_name(bgr):
@@ -75,11 +76,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
     ap.add_argument("--name", help="name of the match (default: the name of the video without _dual)")
-    ap.add_argument("--model", default=str(HOME / "runs" / "detect" / "runs" / "v8_dual" / "weights" / "best.pt"))
+    ap.add_argument("--model", default=str(config.model_path("v8_dual")))
     ap.add_argument("--pitch", default=str(HERE / "pitch" / "pitch_6v6.json"))
     ap.add_argument("--ref", default="mecz2", help="the match whose calibration is the reference for the automatic calibration of this one")
-    ap.add_argument("--calib-dir", default=str(HOME / "calib"))
-    ap.add_argument("--analysis-dir", default=str(HOME / "analysis"))
+    ap.add_argument("--calib-dir", default=str(config.CALIB_DIR))
+    ap.add_argument("--analysis-dir", default=str(config.ANALYSIS_DIR))
     ap.add_argument("--out-dir", help="the analysis folder (default: <analysis-dir>/<name>_dual)")
     ap.add_argument("--names", help='names of the teams, e.g. "Czarni,Pomarańczowi" (team 0 first; default: from the colour of the kits)')
     ap.add_argument("--date", help="date of the match (default: the date of the video file)")
@@ -95,6 +96,12 @@ def main():
     cdir = Path(a.calib_dir).expanduser()
     out = Path(a.out_dir).expanduser() if a.out_dir else Path(a.analysis_dir).expanduser() / (name + "_dual")
     model, pitch = Path(a.model).expanduser(), Path(a.pitch).expanduser()
+    if not a.dry_run:
+        try:
+            for f in config.ensure_reference_calibration(a.ref, cdir):
+                print(f"reference calibration copied from the repository: {f}")
+        except FileNotFoundError as e:
+            raise SystemExit(f"{e}; give --ref of a match whose calibration is in {cdir}")
     R = Runner(a.dry_run)
     T = lambda f: str(HERE / f)
     print(f"match {name}: video {video}, analysis in {out}")
@@ -140,6 +147,7 @@ def main():
         except Exception:
             names = "Drużyna A,Drużyna B"
     date = a.date or (video_date(video) if video.exists() else "")
+    R.run("quality", [R.py, T("quality.py"), out, "--name", name, "--calib-dir", cdir])
     R.run("report", [R.py, T("match_report.py"), out, "--pitch", pitch, "--match", cfg, "--names", names or "A,B", "--date", date, "--lang", "pl"])
 
     if not a.dry_run:

@@ -46,20 +46,23 @@ One command from the video to the report (`process_match.py`, below). Measured o
 night under floodlights (`mecz4_2dual`, 53 min, 6 goals), against crops judged by eye and the official minutes of the goals from the match reports
 of the league:
 
-| | day | night |
-|---|---|---|
-| half times found automatically (against the whistles written by hand) | within 51 s | within 56 s |
-| team of a player, rows of the class player (the ones the statistics use) | 92% | 92% |
-| goals found, with a goal at that minute in the match report | 12 of 12 found, 12 of 13 goals | **6 of 6 found, 6 of 6 goals** |
-| the goal missed | 16th minute (the detector did not see the ball at the kick-off) | none |
-| ball position known | 83% of the frames | 83-95% |
+| | day (`mecz1`) | night (`mecz4_2dual`) | day, third match (`mecz4_3dual`) |
+|---|---|---|---|
+| half times found automatically (against the whistles written by hand) | within 51 s | within 56 s | 25.7 and 25.8 min (not compared with the whistles) |
+| team of a player, rows of the class player (the ones the statistics use) | 92% | 92% | not measured |
+| goals found, with a goal at that minute in the match report | 12 of 12 found, 12 of 13 goals | **6 of 6 found, 6 of 6 goals** | 7 of 7 found, **7 of 10 goals** |
+| the goals missed | 16th minute (the detector did not see the ball at the kick-off) | none | 38th and 39th (a restart recognised by the formation only), 45th (the end of a half: no restart after it) |
+| scorer of a goal found | right by the goal side | right | right in 3 of 3 goals where the ball was seen at a goal, **1 of 4** where it was not (the kicking-off team is a poor guess): the score came out 2-5 instead of 6-4 and the report marks it as approximate |
+| ball position known | 83% of the frames | 83-95% | 84% |
 
 The day match was not processed from scratch with `process_match.py` in one run (the steps were checked separately: the calibration from scratch
 explained 70% of the lines, the half times were within 51 s, the goals above come from the run with the calibration made by hand), and the night match
 was processed from scratch twice. The goal rules (kick-offs recognised by the ball, a formation without a tracked ball but with the ball seen at a goal and on the centre spot, the same
-restart seen twice) were set on these two matches, so a third match is the real test of them. Shots and xG are not shown by the report (the ball
-track finds only 1 of 12 goals as a shot); the pass accuracy is reliable, the number of passes is a lower bound; the possession depends on
-the details of the detection by about 4 points.
+restart seen twice) were set on these two matches, so the third match is the real test of them: 7 of its 10 goals were found, none false (25 of 29 goals on three matches, 0 false). Shots and xG are
+not shown by the report: of 35 shots judged by eye on two matches only 37% were real shots, and the ball track finds none of the goals as a shot on the third match. Passes are read from
+the touches of tracked players (`--passes auto`): on two matches (60 judged) 72% of the passes found are real and the program finds roughly half of them; the verdict completed / lost agrees with a
+human in 69% of the cases: it names too many passes 'lost' (only 14% of those are real lost passes), so the raw share of completed passes (52-57%) understates the accuracy a great deal. The report therefore shows an estimate corrected with `pass_calibration.py` (from 89 passes judged by eye; about 87% on the third match, 95% interval about 76-93%, for the passes the program finds; the same correction for both teams). The possession depends on the details of the detection by about 4 points and its accuracy on random moments was not measured.
+`quality.py` writes `quality.json` and the report opens with a banner (trustworthy / reservations / not trustworthy) and a panel of what it shows and what it does not.
 
 ![Top-down animation of the analysis](docs/overlay_mecz1_dual.gif)
 
@@ -105,10 +108,12 @@ fetched; `--goals 14:21,21:29,...` gives the times by hand.
 
 ## Tests
 ```bash
-python -m unittest discover -s tests -v     # about 10 s, no GPU and no model needed (35 tests)
+python -m unittest discover -s tests -v     # about 12 s, no GPU and no model needed (105 tests; two need matplotlib)
 ```
 The tests cover the half times (`auto_halves.py`), the goals on a small synthetic match with known goals, the same restart seen twice, the comparison with
-the minutes of the match report, the team classifier, the one-command runner (as a dry run) and the minutes in the report. GitHub Actions runs them on every push.
+the minutes of the match report, the team classifier, the one-command runner (as a dry run), the minutes and the quality banner of the report, the statistics (`match_stats.py`),
+the passes from the touches of players (`match_actions.py`), the tools that sample passes and shots for judging by eye (`compare_actions.py`), the gap filling of the ball track
+(`ball_redetect_probe.py`), the quality checks (`quality.py`), the pass accuracy correction (`pass_calibration.py`) and the paths (`config.py`). GitHub Actions runs them on every push.
 
 ## Pitch
 6v6 artificial pitch, 56 × 32.4 m. Penalty area 11.1 × 19.6 m, centre circle radius 4.75 m – estimated
@@ -246,15 +251,16 @@ Lessons: full frame resolution mattered most for the ball (v3 → v4), more matc
   head, shirt, shorts and socks, `reid_probe.py`) tell them apart only partly (AUC 0.75; the differences
   are mostly the shorts) and the tracks used for the test were not clean, so there are no per-player
   totals. Reliable: team distance, team shape, heatmaps, number of substitutions (about 3 of 4 changes).
-- Passes, shots and xG are estimates from the ball track: the ball is visible in about 76% of the frames and is lost most easily when it flies fast, so the numbers of passes and shots are lower bounds (on simulated matches about half of the passes and a third to a half of the shots are found; the pass accuracy is reliable). The report hides shots and xG when the ball track finds fewer than half of the goals as shots.
+- **Passes are approximate, shots and xG are not available.** The ball is visible in about 84% of the frames and is lost most easily when it flies fast. Passes (touches of tracked players, 60 judged on two matches): 72% of those found are real, roughly half of the real ones are found (one match, 30 windows), completed / lost agrees with a human in 69% (the raw share of completed passes understates the accuracy, so the report shows a corrected estimate, `pass_calibration.py`); passes shorter than 4 m are not counted (`--pass-min-d`; those of 2-4 m were real in 60% of 30 judged). Shots: 37% of 35 judged were real shots; the ball track found none of the 7 goals of the third match as a shot; neither the end of the action (ball behind the goal line, the goalkeeper's touch, the distance) nor a lower detection threshold for the ball (`ball_redetect_probe.py`) lifted that above about 60%. The report hides shots and xG and says so.
+- A model trained on 152 more frames of a third match (`v9`) did not improve the ball (AP50 0.64 / 0.63 against 0.68 / 0.63 of `v8`), so `v8` stays.
 - Team assignment (on 99 random player crops of `mecz1`, judged by eye): 91% right after the kick-off method,
   against 83% with the shirt colour clustered over the whole match. The mistakes are mostly dark shirts taken
   for light ones and referees taken for players.
 - Possession is sensitive to such details (two nearly identical detection models differed by 4 points of
   possession in 8 minutes). On the moments where analyses disagree the models are right in about 40% of the
   cases; this is not the overall accuracy, which is still to be measured on random moments (`compare_possession.py --random`).
-- The ball is small and lost in about 24% of the frames, and hard to see at the centre spot; goals and
-  kick-offs are therefore not detected automatically (`--goals` takes the goal times, optional).
+- The ball is small and lost in about 16% of the frames, and hard to see at the centre spot: a restart recognised by the formation alone, and a goal at the end of a half (no restart after it),
+  can be missed (25 of 29 goals found on three matches, none false). Where the ball was not seen at a goal the scorer is guessed from the team that kicks off and is often wrong, so the score is marked approximate.
 - Goalkeepers are recognised at the kick-off of each half (own kit); a goalkeeper kit similar to a team's
   kit switches this off with a warning.
 
@@ -264,11 +270,23 @@ Lessons: full frame resolution mattered most for the ball (v3 → v4), more matc
 - [x] Dual-lens analysis in metres: detection, ball, teams and goalkeepers, possession, statistics, tracks
 - [x] Teams from the kick-offs with a classifier of the appearance, blind checks of the teams and of the possession
 - [x] Half times, goals and the score found automatically; one command from the video to the report
-- [ ] A third match as the independent test of the goal rules; the goal of the 16th minute of `mecz1` (the ball is not seen at that kick-off)
+- [x] A third match as the independent test of the goal rules (`mecz4_3dual`: 7 of 10 goals found, none false, the scorer wrong where the ball was not seen at a goal)
+- [ ] The scorer of a goal where the ball was not seen at a goal; the goals at the end of a half; the goal of the 16th minute of `mecz1` (the ball is not seen at that kick-off)
+- [ ] Passes and shots good enough to show without a caveat (passes: precision >= 85%, recall >= 70%, completed / lost >= 85%; shots: precision >= 75%): needs a better ball (hard frames: `extract_dual_frames.py --mode hard`)
 - [ ] Possession accuracy measured on random moments (`compare_possession.py --random`)
 - [ ] More annotated dual-lens matches (evening and night): false balls on socks and heads, black kits against the near-black referee, gaps in the ball track; then shots and xG
 - [x] Automated tests (`python -m unittest discover -s tests`: half times, goals on a synthetic match, comparison with the match report, teams, runner, report) and CI (GitHub Actions)
 - [ ] The Docker image is written but was not built by the author
+
+## License
+[Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)](LICENSE): you may use, share and adapt the code, the documentation and the
+annotations for **non-commercial** purposes only, and you must **credit the author** (Hubert, https://github.com/hubixek, with a link to this repository and
+to the license, and a note of any changes). Using it to earn money (for example a paid analysis service) needs the author's permission.
+
+Third parties: the detection uses [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics), which is licensed under AGPL-3.0 (or under a commercial
+license from Ultralytics). The detection model weights of this project were trained from YOLOv8 weights and may carry the same terms. The match
+videos and the frames made from them are not part of this repository and are not licensed by it. This is not legal advice; check the terms before you
+distribute the weights or offer the analysis as a service.
 
 ## Author
 Hubert – [GitHub](https://github.com/hubixek)

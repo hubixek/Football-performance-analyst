@@ -32,6 +32,16 @@ class Picking(unittest.TestCase):
         self.assertTrue(all(b - a_ >= 15.0 for a_, b in zip(ts, ts[1:])))
         self.assertTrue(all(x["type"] == "pass" for x in d1))
 
+    def test_only_passes_of_the_wanted_length(self):
+        a = actions()
+        for i, p in enumerate(a):
+            if p["type"] == "pass":
+                p["x2"] = p["x"] + (2.5 if i % 2 else 10.0)                  # alternately a short and a long pass
+        short = ca.pick_detections(a, "pass", 50, 1.0, np.random.default_rng(0), dist=(2.0, 4.0))
+        self.assertTrue(short and all(2.0 <= ca.pass_length(p) < 4.0 for p in short))
+        self.assertEqual(len(ca.pick_detections(a, "pass", 50, 1.0, np.random.default_rng(0), dist=(4.0, 99.0))), len([p for p in a if p["type"] == "pass" and ca.pass_length(p) >= 4.0]))
+        self.assertTrue(all(p["type"] == "shot" for p in ca.pick_detections(a, "shot", 5, 1.0, np.random.default_rng(0), dist=(2.0, 4.0))))   # shots are not filtered by length
+
     def test_fewer_candidates_than_asked(self):
         self.assertEqual(len(ca.pick_detections(actions(n_shot=3), "shot", 30, 5.0, np.random.default_rng(0))), 3)
 
@@ -88,6 +98,17 @@ class Scoring(unittest.TestCase):
         self.assertEqual((p["windows"], p["user_count"], p["program_count"]), (2, 10, 6))
         self.assertAlmostEqual(p["recall_estimate"], 0.48)
         self.assertAlmostEqual(s["recall_estimate"], min(1.0, 1 * 0.75 / 3))
+
+    def test_no_recall_from_a_sample_limited_to_a_range_of_lengths(self):
+        key = [{"id": str(i), "type": "pass", "time_s": i, "program_outcome": "completed", "inferred": 0} for i in range(1, 5)]
+        det = [{"id": k["id"], "real": "y", "completed": "y", "on_target": ""} for k in key]
+        wins = [{"id": "1", "passes": "5", "shots": "0"}]
+        wkey = [{"id": "1", "t0": 0, "t1": 10, "program_passes": 4, "program_shots": 0}]
+        self.assertIn("recall_estimate", ca.score(det, key, wins, wkey)["pass"])
+        r = ca.score(det, key, wins, wkey, {"pass_dist": [2.0, 4.0], "only": "passes"})
+        self.assertNotIn("recall_estimate", r["pass"])
+        self.assertTrue(r["pass"]["recall_not_estimated"])
+        self.assertEqual(r["pass"]["precision"], 1.0)                              # the precision of the range is still reported
 
     def test_nothing_judged_yet(self):
         key = [{"id": "1", "type": "pass", "time_s": 1, "program_outcome": "lost", "inferred": 0}]

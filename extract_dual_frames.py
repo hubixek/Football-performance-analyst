@@ -26,6 +26,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import config
 
 
 def read_ball(folder):
@@ -114,11 +115,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
     ap.add_argument("--match", required=True, help="match config with half times (match_config.py)")
-    ap.add_argument("--out", default=str(Path.home() / "football" / "frames_dual"))
+    ap.add_argument("--out", default=str(config.HOME / "frames_dual"))
     ap.add_argument("--mode", choices=["uniform", "hard", "both"], default="uniform")
     ap.add_argument("--every", type=float, default=20.0, help="uniform: seconds between moments")
     ap.add_argument("--analysis", help="hard: analysis folder of this match (ball.csv, possession.csv, optionally actions.csv)")
-    ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"), help="hard: calibration of the match, to pick the lens")
+    ap.add_argument("--calib-dir", default=str(config.CALIB_DIR), help="hard: calibration of the match, to pick the lens")
     ap.add_argument("--pitch", help="hard: pitch json (default 56 x 32.4 m)")
     ap.add_argument("--max-hard", type=int, default=60, help="hard: how many moments")
     ap.add_argument("--min-gap", type=float, default=0.5, help="hard: shortest gap in the ball detections, s")

@@ -24,6 +24,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import config
 
 CAMS = ("top", "bottom")
 HERE = Path(__file__).resolve().parent
@@ -105,7 +106,7 @@ def main():
     ap.add_argument("--name", required=True, help="name of the match (the calibration calib/<name>_top.json is used)")
     ap.add_argument("--model", required=True)
     ap.add_argument("--pitch", required=True)
-    ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"))
+    ap.add_argument("--calib-dir", default=str(config.CALIB_DIR))
     ap.add_argument("--out", help="the config to write (default: matches/<name>.json next to the scripts)")
     ap.add_argument("--step", type=float, default=2.0, help="seconds between the frames that are counted")
     ap.add_argument("--imgsz", type=int, default=1536)

@@ -30,13 +30,16 @@ from pathlib import Path
 
 import numpy as np
 
+import pass_calibration
+
 TEXT = {
     "pl": {
         "sport": "PIŁKA NOŻNA 6v6", "analysis": "Analiza meczu", "status": "KONIEC",
         "tabs": ["MECZ", "1. POŁOWA", "2. POŁOWA"],
         "xg": "Oczekiwane gole (xG) *", "shots": "Strzały łącznie *", "shots_on": "Strzały na bramkę *", "big_chances": "Wielkie szanse *",
-        "corners": "Rzuty rożne *", "passes": "Podania *", "box_entries": "Wejścia w pole karne *",
-        "est_note": "* Szacunek z widocznej piłki (piłka widoczna w {vis:.0f}% klatek): liczby podań i strzałów są zaniżone, procent celnych podań jest wiarygodniejszy.",
+        "corners": "Rzuty rożne *", "passes": "Celność podań (szacunek) *", "box_entries": "Wejścia w pole karne *",
+        "est_note": "* Szacunek z widocznej piłki (piłka widoczna w {vis:.0f}% klatek): liczby podań są zaniżone (program znajduje mniej więcej połowę), a procent udanych podań jest orientacyjny.",
+        "pass_note": "Celność podań to szacunek skorygowany o błąd programu: za często nazywa on podanie „straconym” (na podstawie ocen człowieka dla {n} podań z {m} meczów); w nawiasie surowe liczby programu (udane/wszystkie znalezione). Przedział 95%: drużyna 0 {ca}, drużyna 1 {cb}.",
         "shots_hidden": "Strzały i xG są ukryte: tor piłki znalazł {pct}% goli jako strzały (poniżej 50%), więc liczby byłyby mocno zaniżone (--shots always je pokazuje).",
         "est_goals": " Z {given} goli {found} znaleziono jako strzały z toru piłki, resztę dodano z pozycji ostatniej kontroli.",
         "top": "TOP STATYSTYKI", "possession": "Posiadanie piłki", "possession_opp": "Posiadanie na połowie rywala",
@@ -55,13 +58,25 @@ TEXT = {
                        "przez {dead:.0f}% czasu piłka była poza boiskiem, leżała w miejscu albo trwało wznowienie po bramce. "
                        "Dystans to oszacowanie (około ±10%); zawodnicy nie są identyfikowani indywidualnie."),
         "team": "Drużyna {n}",
+        "quality_title": {"ok": "Analiza wiarygodna w granicach opisanych niżej", "warn": "Analiza z zastrzeżeniami", "bad": "Analiza niewiarygodna"},
+        "score_approx": "wynik orientacyjny: strzelca części goli zgadnięto",
+        "shows_title": "CO TEN RAPORT POKAZUJE, A CZEGO NIE",
+        "shows": ["Gole i wynik: gole znalezione po piłce są prawdziwe (na {matches} meczach {goals_found} z {goals_total}, żaden fałszywy); program może pominąć gol na końcu połowy albo wznowienie bez widocznej piłki.",
+                  "Strefy, ustawienie drużyn, dystans: liczone z pozycji zawodników w metrach (dystans ±10%).",
+                  "Posiadanie: orientacyjne. Dokładność nie była mierzona na losowych momentach, a dwa podobne modele różniły się o około 4 punkty.",
+                  "Podania: orientacyjne. Na {matches} meczach około {passes_precision}% znalezionych to prawdziwe podania (próba {passes_judged}), program znajduje mniej więcej połowę, "
+                  "surowy werdykt \"udane / stracone\" zgadza się z człowiekiem w około {passes_completed_agree}% przypadków i zaniża celność, dlatego pokazana celność jest szacunkiem skorygowanym "
+                  "(przedział niepewności około 9 punktów procentowych; dotyczy podań, które program znajduje).",
+                  "Strzały i xG: niedostępne. Na {shots_judged} ocenionych strzałach tylko około {shots_precision}% było prawdziwymi strzałami.",
+                  "Statystyki pojedynczych zawodników: niedostępne, zawodnicy są śledzeni, ale nie identyfikowani."],
     },
     "en": {
         "sport": "FOOTBALL 6v6", "analysis": "Match analysis", "status": "FULL TIME",
         "tabs": ["MATCH", "1ST HALF", "2ND HALF"],
         "xg": "Expected goals (xG) *", "shots": "Total shots *", "shots_on": "Shots on target *", "big_chances": "Big chances *",
-        "corners": "Corners *", "passes": "Passes *", "box_entries": "Entries into the penalty area *",
-        "est_note": "* Estimate from the visible ball (the ball is visible in {vis:.0f}% of the frames): the numbers of passes and shots are too low, the pass accuracy is more reliable.",
+        "corners": "Corners *", "passes": "Pass accuracy (estimate) *", "box_entries": "Entries into the penalty area *",
+        "est_note": "* Estimate from the visible ball (the ball is visible in {vis:.0f}% of the frames): the numbers of passes are too low (the program finds roughly half) and the pass accuracy is approximate.",
+        "pass_note": "The pass accuracy is an estimate corrected for an error of the program: it names too many passes 'lost' (from a human's judgement of {n} passes of {m} matches); the raw counts of the program (completed / all found) are in brackets. 95% interval: team 0 {ca}, team 1 {cb}.",
         "shots_hidden": "Shots and xG are hidden: the ball track found {pct}% of the goals as shots (below 50%), so the numbers would be far too low (--shots always shows them).",
         "est_goals": " Of {given} goals {found} were found as shots in the ball track, the rest were added from the position of the last control.",
         "top": "TOP STATS", "possession": "Ball possession", "possession_opp": "Possession in the opponent's half",
@@ -73,6 +88,17 @@ TEXT = {
         "length": "Length of the team (m)", "width": "Width of the team (m)",
         "goals_missing": "The program found {n} of the {total} goals; the missing ones are not listed.", "goals": "GOALS", "goals_auto": "found automatically from the kick-offs and the ball track; the time of a goal is an estimate (a few seconds)",
         "score_auto": "score from the goals found automatically", "goal_minute": "minute {m}",
+        "quality_title": {"ok": "The analysis is trustworthy within the limits below", "warn": "The analysis has reservations", "bad": "The analysis is not trustworthy"},
+        "score_approx": "approximate score: the scorer of some goals was guessed",
+        "shows_title": "WHAT THIS REPORT SHOWS AND WHAT IT DOES NOT",
+        "shows": ["Goals and score: the goals found by the ball are real (on {matches} matches {goals_found} of {goals_total}, none false); the program can miss a goal at the end of a half or a restart without a visible ball.",
+                  "Zones, team shape, distance: computed from the positions of the players in metres (distance +-10%).",
+                  "Possession: approximate. Its accuracy was not measured on random moments, and two similar models differed by about 4 points.",
+                  "Passes: approximate. On {matches} matches about {passes_precision}% of the passes found were real (sample {passes_judged}), the program finds roughly half, "
+                  "the raw verdict completed / lost agrees with a human in about {passes_completed_agree}% of the cases and understates the accuracy, so the accuracy shown is a corrected "
+                  "estimate (an interval of about 9 points; it concerns the passes the program finds).",
+                  "Shots and xG: not available. Of {shots_judged} judged shots only about {shots_precision}% were real shots.",
+                  "Statistics of single players: not available, players are tracked but not identified."],
         "timeline": "POSSESSION TIMELINE", "timeline_note": "Share of possession in the last minute, axis: minute of play",
         "half": "Half {n}", "heat": "WHERE THE PLAYERS PLAYED", "heat_note": "Heat maps, every team attacks to the right",
         "animation": "ANIMATION", "about": "ABOUT THE ANALYSIS",
@@ -126,6 +152,9 @@ svg{display:block;width:100%;height:auto}
 .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
 img.anim{width:100%;border-radius:8px;display:block}
 .about{color:var(--muted);font-size:12.5px;line-height:1.55;padding-bottom:10px}
+.quality{border-radius:10px;padding:12px 16px;margin:10px 0;border:1px solid}
+.quality.ok{background:#e8f5ec;border-color:#9bd0aa;color:#14532d}.quality.warn{background:#fff6e0;border-color:#e8c36a;color:#6b4a00}.quality.bad{background:#fde8e8;border-color:#e08a8a;color:#7f1d1d}
+.quality h3{margin:0 0 6px;font-size:14px}.quality li{margin:3px 0;font-size:13px}
 @media (max-width:560px){.two{grid-template-columns:1fr}.mid .score{font-size:32px;letter-spacing:1px}.badge{width:56px;height:56px}.badge i{width:32px;height:32px}.team{font-size:14px}.wrap{padding:14px 10px 30px}.panel{padding:12px 12px 6px}.tab{padding:9px 12px}.vals .lab{font-size:13px;padding:0 6px}}
 """
 
@@ -212,6 +241,9 @@ def collect(summary, stats, dist, actions, scope):
         d.update({"xg": ac.get("xg"), "shots": ac.get("shots"), "shots_on": ac.get("shots_on_target"), "big_chances": ac.get("big_chances"),
                   "corners": ac.get("corners"), "box_entries": ac.get("box_entries"), "pass_att": ac.get("passes_attempted"),
                   "pass_ok": ac.get("passes_completed"), "pass_acc": ac.get("pass_accuracy_percent")})
+        att, ok = ac.get("passes_attempted") or 0, ac.get("passes_completed") or 0
+        est = pass_calibration.estimate(ok, att - ok) if att else None
+        d["pass_acc_est"], d["pass_acc_ci"] = (est[0], (est[1], est[2])) if est else (None, None)
     return data
 
 
@@ -225,7 +257,13 @@ def pane(scope, data, T, colors, hidden, show_shots=False, vis=None):
         rows += [row(T["shots"], a["shots"], b["shots"], "int"), row(T["shots_on"], a["shots_on"], b["shots_on"], "int"),
                  row(T["big_chances"], a["big_chances"], b["big_chances"], "int")]
     rows.append(row(T["corners"], a["corners"], b["corners"], "int"))
-    if a["pass_acc"] is not None and b["pass_acc"] is not None:
+    pass_note = ""
+    if a.get("pass_acc_est") is not None and b.get("pass_acc_est") is not None:
+        rows.append(row(T["passes"], a["pass_acc_est"], b["pass_acc_est"], "pct", f'≈{a["pass_acc_est"]:.0f}% ({a["pass_ok"]}/{a["pass_att"]})',
+                        f'({b["pass_ok"]}/{b["pass_att"]}) ≈{b["pass_acc_est"]:.0f}%'))
+        ci = lambda d: f'{d["pass_acc_ci"][0]:.0f}-{d["pass_acc_ci"][1]:.0f}%'
+        pass_note = T["pass_note"].format(n=pass_calibration.judged(), m=len(pass_calibration.CALIBRATION["matches"]), ca=ci(a), cb=ci(b))
+    elif a["pass_acc"] is not None and b["pass_acc"] is not None:
         rows.append(row(T["passes"], a["pass_acc"], b["pass_acc"], "pct", f'{a["pass_acc"]:.0f}% ({a["pass_ok"]}/{a["pass_att"]})',
                         f'({b["pass_ok"]}/{b["pass_att"]}) {b["pass_acc"]:.0f}%'))
     rows += [
@@ -242,6 +280,8 @@ def pane(scope, data, T, colors, hidden, show_shots=False, vis=None):
     top = "".join(rows)
     if vis is not None and any(x is not None for x in (a["corners"], a["pass_acc"], a["box_entries"])):
         top += f'<p class="note" style="text-align:left;margin-top:-4px">{html.escape(T["est_note"].format(vis=vis))}</p>'
+        if pass_note:
+            top += f'<p class="note" style="text-align:left;margin-top:-4px">{html.escape(pass_note)}</p>'
     thirds = ""
     if a["thirds"] and b["thirds"] and None not in a["thirds"] + b["thirds"]:
         thirds = (f'<div class="panel"><h3>{T["thirds"]}</h3>' + "".join(
@@ -279,6 +319,18 @@ def load_goals(folder, match_path):
             out.append({"minute": minute, "recording_s": t, "half": h, "team": int(r["scorer"]) if r.get("scorer", "") != "" else None,
                         "rough": r.get("goal_time_is_rough") == "1"})
     return sorted(out, key=lambda g: g["recording_s"])
+
+
+def quality_banner(qual, T, lang):
+    """The banner on top of the report: the level of trust and what is not ok (plus the standing note on the goals)."""
+    items = "".join(f"<li>{html.escape(c[lang])}</li>" for c in qual["checks"] if c["status"] != "ok" or c["id"] == "info")
+    return f'<div class="quality {qual["level"]}"><h3>{html.escape(T["quality_title"][qual["level"]])}</h3><ul>{items}</ul></div>'
+
+
+def shows_panel(qual, T):
+    """What the report shows and what it does not, with the measured accuracy (quality.MEASURED)."""
+    items = "".join(f"<li>{html.escape(t.format(**qual['measured']))}</li>" for t in T["shows"])
+    return f'<div class="panel"><h3>{T["shows_title"]}</h3><ul>{items}</ul></div>'
 
 
 def goals_panel(goals, T, names, colors, total=None):
@@ -407,6 +459,10 @@ def main():
     if cf.exists() and False:                                   # the kit colours are often pale; the animation uses blue and red
         c = json.loads(cf.read_text())
     goals = load_goals(folder, a.match)
+    import quality as quality_module
+    qpath = folder / "quality.json"
+    qual = json.loads(qpath.read_text()) if qpath.exists() else quality_module.assess(folder)
+    score_approx = any(c["id"] == "goals_guess" and not a.score for c in qual["checks"])
     score, score_auto = ("–", "–"), False
     if a.score:
         x, y = a.score.replace(":", "-").split("-")
@@ -424,6 +480,7 @@ def main():
         about += T["est_goals"].format(given=quality["goals_given"], found=quality.get("goals_found_as_shots", 0))
     if actions and not show_shots:
         about += " " + T["shots_hidden"].format(pct=("–" if found_pct is None else f"{found_pct:.0f}"))
+    banner, shows = quality_banner(qual, T, a.lang), shows_panel(qual, T)
     gif = ""
     if a.gif:
         g = Path(a.gif).expanduser()
@@ -433,7 +490,7 @@ def main():
                f'{base64.b64encode(g.read_bytes()).decode()}"/></div>')
     payload = {"teams": names, "score": list(score), "score_automatic": score_auto, "goals": goals, "date": a.date, "title": a.title or T["analysis"], "scopes": {sc: {
         f"team_{t}": {k: v for k, v in data[sc][t].items()} for t in (0, 1)} for sc in scopes},
-        "quality": {"possession_assigned_percent": summary.get("assigned_share"), "ball_dead_percent": dead, "actions": quality,
+        "quality": {"level": qual["level"], "checks": [{"id": c["id"], "status": c["status"]} for c in qual["checks"]], "score_approximate": score_approx, "possession_assigned_percent": summary.get("assigned_share"), "ball_dead_percent": dead, "actions": quality,
                     "shots_shown": show_shots}}
     payload_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
 
@@ -444,15 +501,17 @@ def main():
 <div class="crumbs">{T["sport"]}<span>›</span>{html.escape(a.title or T["analysis"])}</div>
 <div class="head">
   <div class="team"><div class="badge"><i style="background:{colors[0]}"></i></div>{html.escape(names[0])}</div>
-  <div class="mid"><div class="date">{html.escape(a.date)}</div><div class="score">{score[0]} - {score[1]}</div><div class="status">{T["status"]}</div>{('<div class="date" style="font-size:11px;margin-top:4px">' + html.escape(T["score_auto"]) + '</div>') if score_auto else ''}</div>
+  <div class="mid"><div class="date">{html.escape(a.date)}</div><div class="score">{score[0]} - {score[1]}</div><div class="status">{T["status"]}</div>{('<div class="date" style="font-size:11px;margin-top:4px;color:#b45309">' + html.escape(T["score_approx"]) + '</div>' if score_approx else '')}{('<div class="date" style="font-size:11px;margin-top:4px">' + html.escape(T["score_auto"]) + '</div>') if score_auto else ''}</div>
   <div class="team"><div class="badge"><i style="background:{colors[1]}"></i></div>{html.escape(names[1])}</div>
 </div>
+{banner}
 <div class="tabs">{tabs}</div>
 {panes}
 {goals_panel(goals, T, names, colors, total=(int(score[0]) + int(score[1])) if (score[0].isdigit() and score[1].isdigit()) else None)}
 {timeline_svg(folder / "possession.csv", T, names, colors)}
 {heat_svg(folder / "tracks.csv", stats, pitch, T, names, colors)}
 {gif}
+{shows}
 <div class="panel"><h3>{T["about"]}</h3><div class="about">{html.escape(about)}</div></div>
 </div>
 <script type="application/json" id="match-data">{payload_json}</script>

@@ -32,7 +32,7 @@ class Runner(unittest.TestCase):
     def test_a_new_match_runs_all_steps_in_order(self):
         out = self.run_dry("t_new_match", tempfile.mkdtemp())
         steps = [l[4:] for l in out.splitlines() if l.startswith("=== ")]
-        self.assertEqual([s.split(" ")[0] for s in steps], ["calibration", "half", "analysis", "statistics", "goals", "statistics", "passes", "report"])
+        self.assertEqual([s.split(" ")[0] for s in steps], ["calibration", "half", "analysis", "statistics", "goals", "statistics", "passes", "quality", "report"])
 
     def test_an_interrupted_run_continues_with_the_half_times(self):
         """A provisional config of the whole recording (left by an interrupted run) is not a result: the half times are made, the finished calibration is kept."""

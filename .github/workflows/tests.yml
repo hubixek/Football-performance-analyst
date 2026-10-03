@@ -14,6 +14,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install (no GPU and no detection model are needed by the tests)
-        run: pip install numpy opencv-python-headless
+        run: pip install numpy opencv-python-headless matplotlib
       - name: Tests
         run: python -m unittest discover -s tests -v

@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+import config
 
 HERE = Path(__file__).resolve().parent
 STEPS = ["detect", "ball", "teams", "events", "possession", "tracks"]
@@ -48,8 +49,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--match", required=True, help="match config (match_config.py)")
     ap.add_argument("--model", required=True)
-    ap.add_argument("--videos", default=str(Path.home() / "football" / "videos"))
-    ap.add_argument("--calib-dir", default=str(Path.home() / "football" / "calib"))
+    ap.add_argument("--videos", default=str(config.VIDEOS_DIR))
+    ap.add_argument("--calib-dir", default=str(config.CALIB_DIR))
     ap.add_argument("--pitch", default=str(HERE / "pitch" / "pitch_6v6.json"))
     ap.add_argument("--out-dir", help="default: ~/football/analysis/<name>_dual")
     ap.add_argument("--ref", help="reference match for automatic calibration, e.g. mecz2")
@@ -86,7 +87,7 @@ def main():
                          f"the field \"video\" of {match} is '{cfg['video']}'; the videos in {Path(a.videos).expanduser()}: "
                          f"{', '.join(videos) or 'none'}\nfix the field (or the --videos folder) and run again")
     cdir = Path(a.calib_dir).expanduser()
-    out = Path(a.out_dir).expanduser() if a.out_dir else Path.home() / "football" / "analysis" / f"{name}_dual"
+    out = Path(a.out_dir).expanduser() if a.out_dir else config.ANALYSIS_DIR / f"{name}_dual"
     out.mkdir(parents=True, exist_ok=True)
     py = sys.executable
     start = time.time()

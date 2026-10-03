@@ -30,6 +30,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+import config
 
 HERE = Path(__file__).resolve().parent
 ALL = ("junk", "backups", "abandoned", "stare-weights", "stare", "caches")
@@ -131,7 +132,7 @@ def collect_eval(repo, foot):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--football", default=str(Path.home() / "football"), help="the folder with videos, calib, analysis, runs")
+    ap.add_argument("--football", default=str(config.HOME), help="the folder with videos, calib, analysis, runs")
     ap.add_argument("--repo", default=str(HERE))
     ap.add_argument("--apply", action="store_true", help="delete (without it only a list)")
     ap.add_argument("--also", default="", help="more categories to delete: " + ", ".join(ALL[1:]))
