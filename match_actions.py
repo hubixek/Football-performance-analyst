@@ -2,10 +2,13 @@
 """Passes, shots, expected goals (xG), corners and entries into the penalty area, estimated from the ball track.
 
 All of it comes from possession.csv (dual_possession.py): where the ball was, which team controlled it (a player of that
-team within 1.5 m) and when it was out of play. Players are not identified, so an action is described by what the ball did.
+team within 1.5 m) and when it was out of play. By default players are not identified, so an action is described by what the ball did;
+with tracks.csv of dual_tracks.py (--passes auto/players) the passes are read from who touched the ball.
 
   pass      the ball leaves a team's control, travels at least --pass-min-d m at --pass-min-speed m/s and is next
             controlled within 3 s: by the same team = completed, by the other team (or out of play) = not completed
+            (--passes players: the same rule applied to the touches of tracked players; a second touch by the SAME player is a
+            dribble, not a pass, and a gap in the ball track between the two touches no longer loses the pass)
   shot      the ball leaves a team's control within --shot-range m of the opponent's goal at --shot-speed m/s or more,
             heads for the goal (--goal-width m plus a margin) and is not received by a team mate
             outcome: goal (a goal time within a few seconds; times from --goals or restarts.json), saved (the other team gets
@@ -110,6 +113,85 @@ def control_segments(t, half, ctrl, merge_gap=0.4, min_s=0.2):
     return segs
 
 
+def load_tracks(path):
+    """tracks.csv of dual_tracks.py -> arrays sorted by time: (time, player name, team, x, y) of the tracked players."""
+    rows = []
+    with open(path) as f:
+        for r in csv.DictReader(f):
+            if r["team"] != "":
+                rows.append((float(r["time_s"]), r["player"], int(r["team"]), float(r["x_m"]), float(r["y_m"])))
+    rows.sort(key=lambda r: r[0])
+    return (np.array([r[0] for r in rows]), [r[1] for r in rows], np.array([r[2] for r in rows], int),
+            np.array([r[3] for r in rows]), np.array([r[4] for r in rows]))
+
+
+def player_control(t, bx, by, inplay, speed, tracks, radius, fly_speed, dt):
+    """Per frame the nearest tracked player within radius m of the ball as (player, team), else None.
+    Frames with the ball out of play or faster than fly_speed (a ball that flies past a player is not controlled by him) give None.
+    A player's position at a frame is his track row nearest in time within half a frame: the tracks keep the times of the detections,
+    which differ from the frame times by a few hundredths of a second, so exact times never match."""
+    times, names, teams, xs, ys = tracks
+    out = [None] * len(t)
+    for i in range(len(t)):
+        if np.isnan(bx[i]) or inplay[i] != 1 or (not np.isnan(speed[i]) and speed[i] > fly_speed):
+            continue
+        lo, hi = np.searchsorted(times, [t[i] - dt / 2, t[i] + dt / 2])
+        nearest = {}                                                   # player -> row nearest in time
+        for k in range(lo, hi):
+            if names[k] not in nearest or abs(times[k] - t[i]) < abs(times[nearest[names[k]]] - t[i]):
+                nearest[names[k]] = k
+        best = None
+        for k in nearest.values():
+            d = float(np.hypot(xs[k] - bx[i], ys[k] - by[i]))
+            if d <= radius and (best is None or d < best[0]):
+                best = (d, names[k], int(teams[k]))
+        if best:
+            out[i] = (best[1], best[2])
+    return out
+
+
+def player_passes(t, half, bx, by, state, who, min_d, min_speed, max_gap, dt, norm, L):
+    """Passes from the touches of tracked players. A touch is a run of frames in which the same player is nearest to the ball.
+    A pass is a touch followed within max_gap s by a touch of ANOTHER player (same team: completed, other team: lost) or by the ball
+    leaving the pitch (lost), at least min_d m and min_speed m/s away. Returns dicts like the ball-based passes."""
+    touches, i, n = [], 0, len(t)
+    while i < n:
+        if who[i] is None:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and who[j + 1] is not None and who[j + 1][0] == who[i][0] and t[j + 1] - t[j] < 0.5 and half[j + 1] == half[i]:
+            j += 1
+        touches.append({"i0": i, "i1": j, "p": who[i][0], "team": who[i][1], "half": int(half[i])})
+        i = j + 1
+    passes = []
+    for k, a in enumerate(touches):
+        b = touches[k + 1] if k + 1 < len(touches) and touches[k + 1]["half"] == a["half"] else None
+        i1 = a["i1"]
+        p0 = np.array([bx[i1], by[i1]])
+        if b is not None and b["p"] == a["p"]:
+            continue                                                   # the same player touches again: a dribble
+        end = None
+        if b is not None and 0 <= t[b["i0"]] - t[i1] <= max_gap:
+            end = (np.array([bx[b["i0"]], by[b["i0"]]]), t[b["i0"]] - t[i1], b["team"] == a["team"])
+        else:                                                          # the ball left the pitch after the pass
+            stop = int(np.searchsorted(t, t[i1] + max_gap))
+            j = next((j for j in range(i1 + 1, min(stop + 1, n)) if half[j] == a["half"] and state[j] == "out" and not np.isnan(bx[j])), None)
+            if j is not None and (b is None or b["i0"] > j):
+                end = (np.array([bx[j], by[j]]), t[j] - t[i1], False)
+        if end is None:
+            continue
+        p1, g, completed = end
+        d = float(np.hypot(*(p1 - p0)))
+        if d < min_d or d / max(g, dt) < min_speed:
+            continue
+        x0n, _ = norm(a["team"], a["half"], *p0)
+        x1n, _ = norm(a["team"], a["half"], *p1)
+        passes.append({"team": a["team"], "half": a["half"], "t": float(t[i1]), "x": float(p0[0]), "y": float(p0[1]),
+                       "x2": float(p1[0]), "y2": float(p1[1]), "completed": bool(completed), "forward": bool(x1n - x0n >= 3.0), "opp_half": bool(x0n >= L / 2)})
+    return passes
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("folder", help="analysis folder (possession.csv, stats.json)")
@@ -120,6 +202,13 @@ def main():
     ap.add_argument("--shot-range", type=float, default=32.0, help="farthest a shot is taken from the goal line, m (goals of a real match were scored from up to 34 m)")
     ap.add_argument("--pass-min-d", type=float, default=4.0, help="shortest pass, m")
     ap.add_argument("--pass-min-speed", type=float, default=5.0, help="slowest pass, m/s")
+    ap.add_argument("--passes", choices=["auto", "ball", "players"], default="auto",
+                    help="players: passes from the touches of tracked players (needs tracks.csv of dual_tracks.py); ball: from the flight of the ball between "
+                    "control segments of a team; auto (default): players when tracks.csv exists, else ball. Measured on mecz1 (30 windows, 30 judged "
+                    "passes): precision 80%% for both, estimated recall 55%% (players) vs 31%% (ball)")
+    ap.add_argument("--tracks", help="tracks.csv for --passes players (default: tracks.csv in the analysis folder)")
+    ap.add_argument("--player-control", type=float, default=1.5, help="--passes players: a player this close to the ball touches it, m (as in dual_possession.py)")
+    ap.add_argument("--pass-max-gap", type=float, default=3.0, help="--passes players: longest time between two touches of a pass, s")
     ap.add_argument("--debug", action="store_true", help="print why the possible passes were not counted (for finding what limits the numbers)")
     ap.add_argument("--fly-speed", type=float, default=7.0, help="a ball faster than this is not controlled by a player next to it, m/s")
     ap.add_argument("--big-chance", type=float, default=0.25, help="xG from which a shot is a big chance")
@@ -307,6 +396,16 @@ def main():
         x1n, _ = norm(team, h, *p1)
         passes.append({"team": team, "half": h, "t": t[i1], "x": float(p0[0]), "y": float(p0[1]), "x2": float(p1[0]), "y2": float(p1[1]),
                        "completed": bool(completed), "forward": bool(x1n - x0n >= 3.0), "opp_half": bool(x0n >= L / 2)})
+
+    tpath = Path(a.tracks).expanduser() if a.tracks else folder / "tracks.csv"
+    if a.passes == "players" and not tpath.exists():
+        raise SystemExit(f"--passes players needs {tpath} (dual_tracks.py)")
+    if a.passes == "auto" and not tpath.exists():
+        print(f"no {tpath}: passes from the flight of the ball (fewer are found; run dual_tracks.py for --passes players)")
+    if a.passes == "players" or (a.passes == "auto" and tpath.exists()):
+        who = player_control(t, bx, by, inplay, speed_now, load_tracks(tpath), a.player_control, a.fly_speed, dt)
+        passes = [p for p in player_passes(t, half, bx, by, state, who, a.pass_min_d, a.pass_min_speed, a.pass_max_gap, dt, norm, L)
+                  if not any(sh["team"] == p["team"] and abs(sh["t"] - p["t"]) <= 1.0 for sh in shots)]     # a shot is not also a pass
 
     # ------------------------------------------------------------------ corners
     corners = []
