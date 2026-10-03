@@ -14,3 +14,6 @@ __pycache__/
 nohup.out
 analysis/
 runs/
+
+# Windows download markers (WSL)
+*:Zone.Identifier
