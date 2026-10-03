@@ -123,10 +123,15 @@ class PlayerPasses(unittest.TestCase):
             run_actions(self.folder, "--passes", "players")
         self.assertIn("tracks.csv", str(cm.exception))
 
-    def test_default_method_does_not_read_the_tracks(self):
+    def test_default_uses_the_tracks_when_they_exist(self):
+        write_analysis(self.folder, long_passes_ball(), PLAYERS)
+        self.assertEqual(run_actions(self.folder), run_actions(self.folder, "--passes", "players"))
+        self.assertEqual(len(run_actions(self.folder)), 2)
+
+    def test_default_falls_back_to_the_ball_without_tracks(self):
         write_analysis(self.folder, long_passes_ball(), PLAYERS)
         (self.folder / "tracks.csv").unlink()
-        run_actions(self.folder)                                               # the default 'ball' method is unchanged and needs no tracks
+        self.assertEqual(run_actions(self.folder), run_actions(self.folder, "--passes", "ball"))
 
 
 if __name__ == "__main__":

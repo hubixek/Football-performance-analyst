@@ -3,7 +3,7 @@
 
 All of it comes from possession.csv (dual_possession.py): where the ball was, which team controlled it (a player of that
 team within 1.5 m) and when it was out of play. By default players are not identified, so an action is described by what the ball did;
-with --passes players the passes are read from who touched the ball (tracks.csv of dual_tracks.py).
+with tracks.csv of dual_tracks.py (--passes auto/players) the passes are read from who touched the ball.
 
   pass      the ball leaves a team's control, travels at least --pass-min-d m at --pass-min-speed m/s and is next
             controlled within 3 s: by the same team = completed, by the other team (or out of play) = not completed
@@ -202,9 +202,10 @@ def main():
     ap.add_argument("--shot-range", type=float, default=32.0, help="farthest a shot is taken from the goal line, m (goals of a real match were scored from up to 34 m)")
     ap.add_argument("--pass-min-d", type=float, default=4.0, help="shortest pass, m")
     ap.add_argument("--pass-min-speed", type=float, default=5.0, help="slowest pass, m/s")
-    ap.add_argument("--passes", choices=["ball", "players"], default="ball",
-                    help="ball: passes from the flight of the ball between control segments of a team (default); players: from the touches of tracked "
-                    "players (needs tracks.csv of dual_tracks.py); measured on mecz1: it finds about twice as many passes as 'ball'")
+    ap.add_argument("--passes", choices=["auto", "ball", "players"], default="auto",
+                    help="players: passes from the touches of tracked players (needs tracks.csv of dual_tracks.py); ball: from the flight of the ball between "
+                    "control segments of a team; auto (default): players when tracks.csv exists, else ball. Measured on mecz1 (30 windows, 30 judged "
+                    "passes): precision 80%% for both, estimated recall 55%% (players) vs 31%% (ball)")
     ap.add_argument("--tracks", help="tracks.csv for --passes players (default: tracks.csv in the analysis folder)")
     ap.add_argument("--player-control", type=float, default=1.5, help="--passes players: a player this close to the ball touches it, m (as in dual_possession.py)")
     ap.add_argument("--pass-max-gap", type=float, default=3.0, help="--passes players: longest time between two touches of a pass, s")
@@ -396,10 +397,12 @@ def main():
         passes.append({"team": team, "half": h, "t": t[i1], "x": float(p0[0]), "y": float(p0[1]), "x2": float(p1[0]), "y2": float(p1[1]),
                        "completed": bool(completed), "forward": bool(x1n - x0n >= 3.0), "opp_half": bool(x0n >= L / 2)})
 
-    if a.passes == "players":
-        tpath = Path(a.tracks).expanduser() if a.tracks else folder / "tracks.csv"
-        if not tpath.exists():
-            raise SystemExit(f"--passes players needs {tpath} (dual_tracks.py)")
+    tpath = Path(a.tracks).expanduser() if a.tracks else folder / "tracks.csv"
+    if a.passes == "players" and not tpath.exists():
+        raise SystemExit(f"--passes players needs {tpath} (dual_tracks.py)")
+    if a.passes == "auto" and not tpath.exists():
+        print(f"no {tpath}: passes from the flight of the ball (fewer are found; run dual_tracks.py for --passes players)")
+    if a.passes == "players" or (a.passes == "auto" and tpath.exists()):
         who = player_control(t, bx, by, inplay, speed_now, load_tracks(tpath), a.player_control, a.fly_speed, dt)
         passes = [p for p in player_passes(t, half, bx, by, state, who, a.pass_min_d, a.pass_min_speed, a.pass_max_gap, dt, norm, L)
                   if not any(sh["team"] == p["team"] and abs(sh["t"] - p["t"]) <= 1.0 for sh in shots)]     # a shot is not also a pass
